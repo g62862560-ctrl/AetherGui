@@ -148,7 +148,7 @@ static class Aether
     private static readonly HttpClient Http = new(new SocketsHttpHandler { Proxy = new WebProxy($"socks5://127.0.0.1:{SocksPort}") })
     { Timeout = TimeSpan.FromSeconds(3) };
 
-    public const string GuiRepo = "noorart1/AetherGui";
+    public const string GuiRepo = "g62862560-ctrl/AetherGui";
     private const string CoreRepo = "CluvexStudio/Aether";
 
     private static HttpClient GitHub(TimeSpan timeout)

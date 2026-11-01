@@ -175,7 +175,7 @@ class Aether {
   // Proxy mode: the same service without a tun, only so Android keeps the app alive in the background.
   static Future<void> keepAlive() => _ch.invokeMethod('keepAlive');
 
-  static const guiRepo = 'noorart1/AetherGui';
+  static const guiRepo = 'g62862560-ctrl/AetherGui';
   static Future<String?> appVersion() => _ch.invokeMethod<String>('appVersion');
   static Future<void> openUrl(String url) => _ch.invokeMethod('openUrl', url);
   static Future<void> vpnSettings() => _ch.invokeMethod('vpnSettings');
