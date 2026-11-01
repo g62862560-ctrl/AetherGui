@@ -375,12 +375,17 @@ class Aether {
   static Future<int?> waitConnected(
     AetherProcess proc,
     int startupSecs,
-    Cancel ct,
-  ) async {
+    Cancel ct, [
+    Log? step,
+  ]) async {
     final sw = Stopwatch()..start();
     int? upAt;
+    var reportAt = 15000;
     while (!proc.exited) {
-      if (upAt == null && await _portOpen()) upAt = sw.elapsedMilliseconds;
+      if (upAt == null && await _portOpen()) {
+        upAt = sw.elapsedMilliseconds;
+        step?.call('Local proxy ready, testing internet...');
+      }
       if (upAt != null) {
         final ms = await ping(ct);
         if (ms != null) return ms;
@@ -389,6 +394,10 @@ class Aether {
       if (t > startupSecs * 1000 &&
           (upAt == null || t - upAt > connectTimeoutMs))
         return null;
+      if (t >= reportAt) {
+        reportAt += 15000;
+        step?.call('Still connecting: ${t ~/ 1000}s of ${startupSecs}s...');
+      }
       await ct.delay(500);
     }
     return null;

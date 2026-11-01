@@ -62,6 +62,7 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
+  static const maxSteps = 8; // lines kept in the connection report on Home
   static const startupDelayMs =
       1000; // pause before the automatic connect on startup
   static const red = Palette.disconnected,
@@ -84,6 +85,7 @@ class _HomePageState extends State<HomePage> {
   int? _busyPort, _freePort; // occupied port behind _error, and a free one to offer
   final _changes = ValueNotifier(0); // tells an open Settings page to rebuild
   final _lines = <(String, Color?)>[];
+  final _steps = <(String, Color?)>[]; // this connect's report on Home; no color = in progress
   final _scroll = ScrollController();
   final _httpPortText = TextEditingController(),
       _socksPortText = TextEditingController();
@@ -158,7 +160,10 @@ class _HomePageState extends State<HomePage> {
   Future<void> _connect() async {
     if (_ct != null) return _ct!.cancel();
     final ct = _ct = Cancel();
-    setState(_clearError);
+    setState(() {
+      _clearError();
+      _steps.clear();
+    });
     await _run(ct);
     _ct = null;
     if (mounted) setState(() {});
@@ -201,9 +206,11 @@ class _HomePageState extends State<HomePage> {
         await ct.delay(1000);
       }
     } on Cancelled {
-      // user pressed Disconnect
+      // user pressed Disconnect, or a port conflict stopped the rotation
+      if (_busyPort == null) _addStep('Stopped.', orange);
     } catch (e) {
       _logError('Connection failed: $e');
+      _addStep('Connection failed.', red);
     } finally {
       Aether.vpnStop();
       _killProcess();
@@ -215,7 +222,7 @@ class _HomePageState extends State<HomePage> {
 
   // Returns when the preset fails to connect within the timeout, or after a connected session drops.
   Future<void> _connectAndMonitor(Preset p, Cancel ct) async {
-    _log('Trying ${p.name}...');
+    _step('Trying ${p.name}...');
     _route = p.name;
     _setStatus('Connecting: ${p.name}', orange);
     var coreFailed = false, portConflict = false;
@@ -232,6 +239,7 @@ class _HomePageState extends State<HomePage> {
         _portInUse(port, ct);
       } else if (mounted) {
         setState(() => _error = '${p.name}: $error');
+        _addStep('${p.name}: core reported an error.', red);
       }
     }
 
@@ -243,14 +251,17 @@ class _HomePageState extends State<HomePage> {
               '${p.name}: core start failed. Check bundled binaries and core settings.',
         );
       }
+      _addStep('${p.name}: core start failed.', red);
       return;
     }
+    _step('Core started, waiting for local proxy...');
 
     final took = Stopwatch()..start();
     int? ms = await Aether.waitConnected(
       proc,
       _coreOptions.isConfigured ? _coreOptions.startupSeconds : p.startupSecs,
       ct,
+      _step,
     );
     if (portConflict) return _killProcess(); // says nothing about this preset
     _connectMs[Aether.presets.indexOf(p)] = ms == null
@@ -268,23 +279,27 @@ class _HomePageState extends State<HomePage> {
           : '${p.name}: no internet, switching.';
       // Keep the core's own message: it says why, this line only says what happened.
       coreFailed ? _log(failure) : _logError(failure);
+      _addStep(failure, red);
       _killProcess();
       return;
     }
 
     _setStatus('Connected: ${p.name}', seaGreen);
     if (mounted) setState(() => _error = null);
-    _log(
+    _step(
       'Connected via ${p.name} in ${(took.elapsedMilliseconds / 1000).toStringAsFixed(1)}s, delay $ms ms.',
+      seaGreen,
     );
     if (!_vpn) {
-      _log(
+      _step(
         'Proxy only: HTTP 127.0.0.1:${Aether.httpPort}, SOCKS5 127.0.0.1:${Aether.socksPort}.',
+        seaGreen,
       );
     } else if (await Aether.vpnStart()) {
-      _log('VPN on: all apps go through aether.');
+      _step('VPN on: all apps go through aether.', seaGreen);
     } else {
       _logError('VPN permission denied: proxy only.');
+      _addStep('VPN permission denied: proxy only.', red);
     }
     for (var fails = 0; fails < 2;) {
       _setDelay(ms == null ? 'timeout' : '$ms ms');
@@ -294,6 +309,7 @@ class _HomePageState extends State<HomePage> {
       fails = ms == null ? fails + 1 : 0;
     }
     _logError('${p.name}: connection lost, switching.');
+    _addStep('${p.name}: connection lost, switching.', red);
     _killProcess();
   }
 
@@ -303,6 +319,7 @@ class _HomePageState extends State<HomePage> {
         ? Aether.httpPort
         : Aether.socksPort;
     _logError('Port $port is in use by another app. Close it or pick a new port.');
+    _addStep('Port $port is in use.', red);
     if (mounted) setState(() => _busyPort = port);
     ct.cancel();
     final free = await Aether.freePort(port, other);
@@ -577,6 +594,20 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
+  void _step(String text, [Color? color]) {
+    _log(text, color);
+    _addStep(text, color);
+  }
+
+  void _addStep(String text, Color? color) {
+    if (!mounted) return;
+    setState(() {
+      _steps.add((text, color));
+      // Auto can rotate for a long time; the full history stays in the activity log.
+      if (_steps.length > maxSteps) _steps.removeAt(0);
+    });
+  }
+
   void _clearError() {
     _error = null;
     _busyPort = null;
@@ -641,6 +672,10 @@ class _HomePageState extends State<HomePage> {
                   const SizedBox(height: 32),
                   if (_error != null) ...[
                     _errorCard(_error!, busy),
+                    const SizedBox(height: 16),
+                  ],
+                  if (_steps.isNotEmpty) ...[
+                    _stepsCard(busy),
                     const SizedBox(height: 16),
                   ],
                   if (!_vpn) ...[_proxyCard(), const SizedBox(height: 16)],
@@ -833,6 +868,66 @@ class _HomePageState extends State<HomePage> {
       ),
     ),
   );
+
+  // What the current connect is doing, step by step, so a slow route does not look stuck.
+  Widget _stepsCard(bool busy) => Card(
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(20, 8, 8, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Connection steps',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Clear steps',
+                icon: const Icon(Icons.close_rounded, size: 20),
+                onPressed: busy ? null : () => setState(_steps.clear),
+              ),
+            ],
+          ),
+          for (final (i, (text, color)) in _steps.indexed)
+            Padding(
+              padding: const EdgeInsets.only(top: 8, right: 12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox.square(
+                    dimension: 20,
+                    child: _stepIcon(color, busy && i == _steps.length - 1),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(child: Text(text)),
+                ],
+              ),
+            ),
+        ],
+      ),
+    ),
+  );
+
+  // Color is never the only signal: running, done and failed each have their own icon.
+  Widget _stepIcon(Color? color, bool current) {
+    if (color == null) {
+      return current
+          ? CircularProgressIndicator(
+              strokeWidth: 2,
+              color: orange,
+              value: MediaQuery.disableAnimationsOf(context) ? 1 : null,
+            )
+          : const Icon(Icons.check_rounded, size: 20, color: seaGreen);
+    }
+    return color == red
+        ? const Icon(Icons.close_rounded, size: 20, color: red)
+        : color == orange
+        ? const Icon(Icons.stop_rounded, size: 20, color: orange)
+        : const Icon(Icons.check_rounded, size: 20, color: seaGreen);
+  }
 
   // The latest failure, in the core's own words: selectable and copyable for reporting.
   // A port conflict also offers the fix: a free port, or one typed by hand.
