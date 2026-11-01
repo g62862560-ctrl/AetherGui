@@ -1,0 +1,179 @@
+# Hosted version of release.sh: run it from the Actions tab on main.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'New version, for example 1.0.7'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+
+env:
+  VERSION: ${{ inputs.version }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: check
+        name: Check version and signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          fail() { echo "::error::$*"; exit 1; }
+          [ "$GITHUB_REF" = refs/heads/main ] || fail "run this workflow on main"
+          [[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "version must look like 1.0.7"
+          git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null && fail "tag v$VERSION already exists"
+          current=$(sed -n 's|.*<Version>\([0-9.]*\)</Version>.*|\1|p' AetherGui.csproj)
+          [ "$VERSION" != "$current" ] && [ "$(printf '%s\n' "$current" "$VERSION" | sort -V | tail -1)" = "$VERSION" ] \
+            || fail "$VERSION is not newer than $current"
+          # A release under another key cannot be installed over the previous one.
+          for s in KEYSTORE_BASE64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            [ -n "${!s}" ] || fail "repository secret $s is missing"
+          done
+          build=$(sed -n 's/^version: [^+]*+\([0-9]*\).*/\1/p' flutter/pubspec.yaml)
+          echo "build=$((build + 1))" >> "$GITHUB_OUTPUT"
+
+  android:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: flutter
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Set version
+        run: sed -i "s/^version: [0-9.]*+[0-9]*/version: $VERSION+${{ needs.prepare.outputs.build }}/" pubspec.yaml
+
+      - run: flutter pub get
+
+      - run: flutter test
+
+      - name: Fetch aether and build hev-socks5-tunnel
+        run: bash fetch_aether.sh
+
+      - name: Set up release signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > android/release.jks
+          cat > android/key.properties <<PROPS
+          storeFile=release.jks
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          PROPS
+
+      - run: flutter build apk --release
+
+      - run: mv build/app/outputs/flutter-apk/app-release.apk "AetherGui-$VERSION-android.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: flutter/AetherGui-${{ inputs.version }}-android.apk
+          if-no-files-found: error
+
+  windows:
+    needs: prepare
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Set version
+        run: sed -i "s|<Version>[0-9.]*</Version>|<Version>$VERSION</Version>|" AetherGui.csproj
+
+      - name: Fetch aether
+        run: |
+          base=https://github.com/CluvexStudio/Aether/releases/latest/download
+          f=aether-windows-x86_64.zip
+          curl -fsSL -o "$f" "$base/$f"
+          curl -fsSL "$base/$f.sha256" | awk -v f="$f" '{print $1"  "f}' | sha256sum -c --quiet
+          unzip -q "$f" -d core
+          cp core/aether.exe .
+          cp -r core/pt .
+          # The project lists these identity files. Placeholders satisfy the build and are never packed.
+          touch aether.toml aether-masque.toml
+
+      - run: dotnet run --project tests/CoreChecks.csproj
+
+      - run: dotnet publish AetherGui.csproj -c Release -o publish
+
+      # Only what the app needs: never identity files or anything else left in publish/.
+      - name: Pack
+        run: |
+          mkdir -p out/AetherGui
+          cp -r publish/AetherGui.exe publish/aether.exe publish/pt publish/LICENSES out/AetherGui/
+          cd out && python -I -m zipfile -c "AetherGui-$VERSION-windows-x64.zip" AetherGui
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: out/AetherGui-${{ inputs.version }}-windows-x64.zip
+          if-no-files-found: error
+
+  publish:
+    needs: [prepare, android, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Commit, tag and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sed -i "s|<Version>[0-9.]*</Version>|<Version>$VERSION</Version>|" AetherGui.csproj
+          sed -i "s/^version: [0-9.]*+[0-9]*/version: $VERSION+${{ needs.prepare.outputs.build }}/" flutter/pubspec.yaml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add AetherGui.csproj flutter/pubspec.yaml
+          git commit -m "Release v$VERSION"
+          git tag "v$VERSION"
+          git push origin HEAD "v$VERSION"
+          gh release create "v$VERSION" assets/* --title "v$VERSION" --generate-notes
