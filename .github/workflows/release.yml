@@ -71,7 +71,8 @@ jobs:
           cache: true
 
       - name: Set version
-        run: sed -i "s/^version: [0-9.]*+[0-9]*/version: $VERSION+${{ needs.prepare.outputs.build }}/" pubspec.yaml
+        run: |
+          sed -i "s/^version: [0-9.]*+[0-9]*/version: $VERSION+${{ needs.prepare.outputs.build }}/" pubspec.yaml
 
       - run: flutter pub get
 
@@ -120,7 +121,8 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Set version
-        run: sed -i "s|<Version>[0-9.]*</Version>|<Version>$VERSION</Version>|" AetherGui.csproj
+        run: |
+          sed -i "s|<Version>[0-9.]*</Version>|<Version>$VERSION</Version>|" AetherGui.csproj
 
       - name: Fetch aether
         run: |
