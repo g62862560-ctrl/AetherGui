@@ -289,6 +289,31 @@ class Aether {
     return inner?.replaceAll(r'\"', '"') ?? text;
   }
 
+  // The port named by a core error about an occupied local listener, or null for any other error.
+  static int? busyPort(String error) {
+    if (!error.contains('Address already in use')) return null;
+    return int.tryParse(
+      RegExp(r'127\.0\.0\.1:(\d+)').firstMatch(error)?.group(1) ?? '',
+    );
+  }
+
+  static Future<bool> portFree(int port) async {
+    try {
+      await (await ServerSocket.bind('127.0.0.1', port)).close();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // The nearest usable port above an occupied one, or null if none of the next 100 is free.
+  static Future<int?> freePort(int busy, int other) async {
+    for (var p = busy + 1; p <= busy + 100; p++) {
+      if (portError('$p', other) == null && await portFree(p)) return p;
+    }
+    return null;
+  }
+
   static List<String> launchArguments(Preset p, CoreOptions options) {
     final args = p.args
         .split(' ')

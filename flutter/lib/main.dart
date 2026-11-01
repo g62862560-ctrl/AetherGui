@@ -81,6 +81,7 @@ class _HomePageState extends State<HomePage> {
   String _delay = ''; // e.g. '24 ms', shown in the button while connected
   String? _route; // preset being tried or used right now
   String? _error; // latest failure, shown on Home until connected or dismissed
+  int? _busyPort, _freePort; // occupied port behind _error, and a free one to offer
   final _changes = ValueNotifier(0); // tells an open Settings page to rebuild
   final _lines = <(String, Color?)>[];
   final _scroll = ScrollController();
@@ -157,7 +158,7 @@ class _HomePageState extends State<HomePage> {
   Future<void> _connect() async {
     if (_ct != null) return _ct!.cancel();
     final ct = _ct = Cancel();
-    setState(() => _error = null);
+    setState(_clearError);
     await _run(ct);
     _ct = null;
     if (mounted) setState(() {});
@@ -217,14 +218,21 @@ class _HomePageState extends State<HomePage> {
     _log('Trying ${p.name}...');
     _route = p.name;
     _setStatus('Connecting: ${p.name}', orange);
-    var coreFailed = false;
+    var coreFailed = false, portConflict = false;
     void coreLog(String line) {
       final error = Aether.coreError(line);
       _log(line, error == null ? null : red);
       // A working session can log passing errors; those stay in the activity log.
       if (error == null || _statusColor == seaGreen) return;
       coreFailed = true;
-      if (mounted) setState(() => _error = '${p.name}: $error');
+      final port = Aether.busyPort(error);
+      if (port != null &&
+          (port == Aether.socksPort || port == Aether.httpPort)) {
+        portConflict = true;
+        _portInUse(port, ct);
+      } else if (mounted) {
+        setState(() => _error = '${p.name}: $error');
+      }
     }
 
     final proc = _process = await Aether.start(p, coreLog, _coreOptions, _scan);
@@ -244,6 +252,7 @@ class _HomePageState extends State<HomePage> {
       _coreOptions.isConfigured ? _coreOptions.startupSeconds : p.startupSecs,
       ct,
     );
+    if (portConflict) return _killProcess(); // says nothing about this preset
     _connectMs[Aether.presets.indexOf(p)] = ms == null
         ? -1
         : took.elapsedMilliseconds;
@@ -286,6 +295,87 @@ class _HomePageState extends State<HomePage> {
     }
     _logError('${p.name}: connection lost, switching.');
     _killProcess();
+  }
+
+  // Every preset needs this port, so rotating on cannot help: stop and let the user choose.
+  Future<void> _portInUse(int port, Cancel ct) async {
+    final other = port == Aether.socksPort
+        ? Aether.httpPort
+        : Aether.socksPort;
+    _logError('Port $port is in use by another app. Close it or pick a new port.');
+    if (mounted) setState(() => _busyPort = port);
+    ct.cancel();
+    final free = await Aether.freePort(port, other);
+    if (mounted && _busyPort == port) setState(() => _freePort = free);
+  }
+
+  void _usePort(int busy, int port) {
+    if (busy == Aether.socksPort) {
+      Aether.socksPort = port;
+      _socksPortText.text = '$port';
+    } else {
+      Aether.httpPort = port;
+      _httpPortText.text = '$port';
+    }
+    _saveSettings();
+    _connect();
+  }
+
+  Future<void> _enterPort(int busy) async {
+    final other = busy == Aether.socksPort
+        ? Aether.httpPort
+        : Aether.socksPort;
+    final input = TextEditingController(text: _freePort?.toString() ?? '');
+    final port = await showDialog<int>(
+      context: context,
+      builder: (context) {
+        String? error;
+        return StatefulBuilder(
+          builder: (context, setDialog) {
+            Future<void> submit() async {
+              final problem = Aether.portError(input.text, other);
+              final port = int.tryParse(input.text);
+              final taken =
+                  problem == null && !await Aether.portFree(port!);
+              if (!context.mounted) return;
+              if (problem == null && !taken) {
+                Navigator.pop(context, port);
+              } else {
+                setDialog(() => error = problem ?? 'Port $port is in use');
+              }
+            }
+
+            return AlertDialog(
+              title: const Text('Choose a port'),
+              content: TextField(
+                controller: input,
+                autofocus: true,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: 'Port',
+                  errorText: error,
+                ),
+                onSubmitted: (_) => submit(),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: submit,
+                  child: const Text('Use and connect'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    // Let the closing dialog finish before disposing its controller.
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    input.dispose();
+    if (mounted && port != null && _ct == null) _usePort(busy, port);
   }
 
   void _killProcess() {
@@ -487,6 +577,12 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
+  void _clearError() {
+    _error = null;
+    _busyPort = null;
+    _freePort = null;
+  }
+
   void _logError(String msg) {
     _log(msg, red);
     if (mounted) setState(() => _error = msg);
@@ -544,7 +640,7 @@ class _HomePageState extends State<HomePage> {
                   _routeLine(busy),
                   const SizedBox(height: 32),
                   if (_error != null) ...[
-                    _errorCard(_error!),
+                    _errorCard(_error!, busy),
                     const SizedBox(height: 16),
                   ],
                   if (!_vpn) ...[_proxyCard(), const SizedBox(height: 16)],
@@ -739,7 +835,8 @@ class _HomePageState extends State<HomePage> {
   );
 
   // The latest failure, in the core's own words: selectable and copyable for reporting.
-  Widget _errorCard(String error) => Semantics(
+  // A port conflict also offers the fix: a free port, or one typed by hand.
+  Widget _errorCard(String error, bool busy) => Semantics(
     liveRegion: true,
     child: Container(
       padding: const EdgeInsets.fromLTRB(20, 8, 8, 8),
@@ -748,26 +845,51 @@ class _HomePageState extends State<HomePage> {
         borderRadius: BorderRadius.circular(24),
         border: Border.all(color: red.withValues(alpha: 0.5)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Icon(Icons.error_outline_rounded, color: red),
-          const SizedBox(width: 12),
-          Expanded(child: SelectableText(error)),
-          IconButton(
-            tooltip: 'Copy error',
-            icon: const Icon(Icons.copy_rounded, size: 20),
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: error));
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(const SnackBar(content: Text('Error copied')));
-            },
+          Row(
+            children: [
+              const Icon(Icons.error_outline_rounded, color: red),
+              const SizedBox(width: 12),
+              Expanded(child: SelectableText(error)),
+              IconButton(
+                tooltip: 'Copy error',
+                icon: const Icon(Icons.copy_rounded, size: 20),
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: error));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Error copied')),
+                  );
+                },
+              ),
+              IconButton(
+                tooltip: 'Dismiss error',
+                icon: const Icon(Icons.close_rounded, size: 20),
+                onPressed: () => setState(_clearError),
+              ),
+            ],
           ),
-          IconButton(
-            tooltip: 'Dismiss error',
-            icon: const Icon(Icons.close_rounded, size: 20),
-            onPressed: () => setState(() => _error = null),
-          ),
+          if (_busyPort != null && !busy)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(0, 4, 12, 8),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: WrapAlignment.end,
+                children: [
+                  OutlinedButton(
+                    onPressed: () => _enterPort(_busyPort!),
+                    child: const Text('Enter port'),
+                  ),
+                  if (_freePort != null)
+                    FilledButton(
+                      onPressed: () => _usePort(_busyPort!, _freePort!),
+                      child: Text('Use port $_freePort'),
+                    ),
+                ],
+              ),
+            ),
         ],
       ),
     ),
