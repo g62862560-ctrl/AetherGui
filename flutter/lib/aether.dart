@@ -274,6 +274,21 @@ class Aether {
     ..findProxy = ((_) => 'PROXY 127.0.0.1:$httpPort')
     ..connectionTimeout = const Duration(seconds: 3);
 
+  static final _ansi = RegExp(r'\x1B\[[0-9;]*[A-Za-z]');
+  static final _errorLine = RegExp(
+    r'^Error:\s*(.+)$|\bERROR\b[:\s]+(.+)$|(\bpanicked at\b.*)$',
+  );
+  static final _wrapped = RegExp(r'^Other\("(.*)"\)$');
+
+  // The message of a core output line that reports an error, or null for any other line.
+  static String? coreError(String line) {
+    final m = _errorLine.firstMatch(line.replaceAll(_ansi, '').trim());
+    if (m == null) return null;
+    final text = (m.group(1) ?? m.group(2) ?? m.group(3))!.trim();
+    final inner = _wrapped.firstMatch(text)?.group(1);
+    return inner?.replaceAll(r'\"', '"') ?? text;
+  }
+
   static List<String> launchArguments(Preset p, CoreOptions options) {
     final args = p.args
         .split(' ')

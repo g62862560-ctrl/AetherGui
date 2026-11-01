@@ -80,6 +80,7 @@ class _HomePageState extends State<HomePage> {
   Color _statusColor = red;
   String _delay = ''; // e.g. '24 ms', shown in the button while connected
   String? _route; // preset being tried or used right now
+  String? _error; // latest failure, shown on Home until connected or dismissed
   final _changes = ValueNotifier(0); // tells an open Settings page to rebuild
   final _lines = <(String, Color?)>[];
   final _scroll = ScrollController();
@@ -125,7 +126,9 @@ class _HomePageState extends State<HomePage> {
       _coreOptions = CoreOptions.load(Aether.dir);
     } catch (_) {
       _autoConnect = false;
-      _log('Could not load core settings. Review settings before connecting.');
+      _logError(
+        'Could not load core settings. Review settings before connecting.',
+      );
     }
     // Fix the shuffled ties once, so the order shown in Settings does not jump on every rebuild.
     if (_order.isEmpty) _order = _autoIndexes();
@@ -154,7 +157,7 @@ class _HomePageState extends State<HomePage> {
   Future<void> _connect() async {
     if (_ct != null) return _ct!.cancel();
     final ct = _ct = Cancel();
-    setState(() {});
+    setState(() => _error = null);
     await _run(ct);
     _ct = null;
     if (mounted) setState(() {});
@@ -180,7 +183,9 @@ class _HomePageState extends State<HomePage> {
     final untried = <Preset>[];
     try {
       if (!File(Aether.exe).existsSync())
-        return _log('aether binary missing: run fetch_aether.sh and rebuild.');
+        return _logError(
+          'aether binary missing: run fetch_aether.sh and rebuild.',
+        );
       // Started now, while the app is in front: Android refuses to start services from the background.
       if (!_vpn) await Aether.keepAlive();
       while (true) {
@@ -196,6 +201,8 @@ class _HomePageState extends State<HomePage> {
       }
     } on Cancelled {
       // user pressed Disconnect
+    } catch (e) {
+      _logError('Connection failed: $e');
     } finally {
       Aether.vpnStop();
       _killProcess();
@@ -210,8 +217,26 @@ class _HomePageState extends State<HomePage> {
     _log('Trying ${p.name}...');
     _route = p.name;
     _setStatus('Connecting: ${p.name}', orange);
-    final proc = _process = await Aether.start(p, _log, _coreOptions, _scan);
-    if (proc == null) return;
+    var coreFailed = false;
+    void coreLog(String line) {
+      final error = Aether.coreError(line);
+      _log(line, error == null ? null : red);
+      // A working session can log passing errors; those stay in the activity log.
+      if (error == null || _statusColor == seaGreen) return;
+      coreFailed = true;
+      if (mounted) setState(() => _error = '${p.name}: $error');
+    }
+
+    final proc = _process = await Aether.start(p, coreLog, _coreOptions, _scan);
+    if (proc == null) {
+      if (mounted) {
+        setState(
+          () => _error =
+              '${p.name}: core start failed. Check bundled binaries and core settings.',
+        );
+      }
+      return;
+    }
 
     final took = Stopwatch()..start();
     int? ms = await Aether.waitConnected(
@@ -229,26 +254,29 @@ class _HomePageState extends State<HomePage> {
     );
     _saveSettings();
     if (ms == null) {
-      _log(
-        proc.exited
-            ? '${p.name}: process exited.'
-            : '${p.name}: no internet, switching.',
-      );
+      final failure = proc.exited
+          ? '${p.name}: process exited.'
+          : '${p.name}: no internet, switching.';
+      // Keep the core's own message: it says why, this line only says what happened.
+      coreFailed ? _log(failure) : _logError(failure);
       _killProcess();
       return;
     }
 
     _setStatus('Connected: ${p.name}', seaGreen);
+    if (mounted) setState(() => _error = null);
     _log(
       'Connected via ${p.name} in ${(took.elapsedMilliseconds / 1000).toStringAsFixed(1)}s, delay $ms ms.',
     );
-    _log(
-      !_vpn
-          ? 'Proxy only: HTTP 127.0.0.1:${Aether.httpPort}, SOCKS5 127.0.0.1:${Aether.socksPort}.'
-          : await Aether.vpnStart()
-          ? 'VPN on: all apps go through aether.'
-          : 'VPN permission denied: proxy only.',
-    );
+    if (!_vpn) {
+      _log(
+        'Proxy only: HTTP 127.0.0.1:${Aether.httpPort}, SOCKS5 127.0.0.1:${Aether.socksPort}.',
+      );
+    } else if (await Aether.vpnStart()) {
+      _log('VPN on: all apps go through aether.');
+    } else {
+      _logError('VPN permission denied: proxy only.');
+    }
     for (var fails = 0; fails < 2;) {
       _setDelay(ms == null ? 'timeout' : '$ms ms');
       await ct.delay(5000);
@@ -256,7 +284,7 @@ class _HomePageState extends State<HomePage> {
       ms = await Aether.ping(ct);
       fails = ms == null ? fails + 1 : 0;
     }
-    _log('${p.name}: connection lost, switching.');
+    _logError('${p.name}: connection lost, switching.');
     _killProcess();
   }
 
@@ -459,6 +487,11 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
+  void _logError(String msg) {
+    _log(msg, red);
+    if (mounted) setState(() => _error = msg);
+  }
+
   void _openSettings() => Navigator.push(
     context,
     MaterialPageRoute(
@@ -510,6 +543,10 @@ class _HomePageState extends State<HomePage> {
                   const SizedBox(height: 24),
                   _routeLine(busy),
                   const SizedBox(height: 32),
+                  if (_error != null) ...[
+                    _errorCard(_error!),
+                    const SizedBox(height: 16),
+                  ],
                   if (!_vpn) ...[_proxyCard(), const SizedBox(height: 16)],
                   _quickSettings(),
                   const SizedBox(height: 16),
@@ -695,6 +732,41 @@ class _HomePageState extends State<HomePage> {
             ),
             trailing: Icon(Icons.open_in_new_rounded, size: 20),
             onTap: Aether.vpnSettings,
+          ),
+        ],
+      ),
+    ),
+  );
+
+  // The latest failure, in the core's own words: selectable and copyable for reporting.
+  Widget _errorCard(String error) => Semantics(
+    liveRegion: true,
+    child: Container(
+      padding: const EdgeInsets.fromLTRB(20, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: red.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: red.withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.error_outline_rounded, color: red),
+          const SizedBox(width: 12),
+          Expanded(child: SelectableText(error)),
+          IconButton(
+            tooltip: 'Copy error',
+            icon: const Icon(Icons.copy_rounded, size: 20),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: error));
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(const SnackBar(content: Text('Error copied')));
+            },
+          ),
+          IconButton(
+            tooltip: 'Dismiss error',
+            icon: const Icon(Icons.close_rounded, size: 20),
+            onPressed: () => setState(() => _error = null),
           ),
         ],
       ),
