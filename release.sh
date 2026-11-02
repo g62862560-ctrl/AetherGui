@@ -18,6 +18,7 @@ current=$(sed -n 's|.*<Version>\([0-9.]*\)</Version>.*|\1|p' AetherGui.csproj)
 sed -i "s|<Version>[0-9.]*</Version>|<Version>$v</Version>|" AetherGui.csproj
 build=$(sed -n 's/^version: [^+]*+\([0-9]*\).*/\1/p' flutter/pubspec.yaml)
 sed -i "s/^version: [0-9.]*+[0-9]*/version: $v+$((build + 1))/" flutter/pubspec.yaml # +N is Android's versionCode, must grow
+sed -i -E "s/(AetherGui-|v)[0-9]+\.[0-9]+\.[0-9]+([-<\/])/\1$v\2/g" docs/index.html # landing page version and download links
 
 dotnet run --project tests/CoreChecks.csproj
 dotnet publish AetherGui.csproj -c Release -o publish
@@ -31,7 +32,7 @@ for f in flutter/build/app/outputs/flutter-apk/app-*-release.apk; do # one APK p
   a=${f##*/app-}; cp "$f" "$out/AetherGui-$v-android-${a%-release.apk}.apk"
 done
 
-git add AetherGui.csproj flutter/pubspec.yaml
+git add AetherGui.csproj flutter/pubspec.yaml docs/index.html
 git commit -m "Release v$v"
 git tag "v$v"
 git push origin HEAD "v$v"
