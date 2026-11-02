@@ -686,7 +686,7 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // Medium on/off switch, no text: red when off, amber while connecting, green when on.
+  // Large on/off switch: red when off, amber while connecting, green when on; the ping shows below it.
   // The thumb icon and the status banner below carry the state too, so color is never the only signal.
   Widget _powerButton(bool busy) {
     final connected = _statusColor == seaGreen;
@@ -701,16 +701,27 @@ class _HomePageState extends State<HomePage> {
           : busy
           ? 'Connecting, tap to cancel'
           : 'Connect',
-      child: Transform.scale(
-        scale: 1.5,
-        child: Switch(
-          value: busy,
-          onChanged: (_) => _connect(),
-          activeThumbColor: _statusColor,
-          thumbIcon: WidgetStatePropertyAll(
-            Icon(icon, color: Palette.background),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // 3x the default switch; FittedBox reserves the space, unlike Transform.scale.
+          SizedBox(
+            width: 156,
+            height: 96,
+            child: FittedBox(
+              child: Switch(
+                value: busy,
+                onChanged: (_) => _connect(),
+                activeThumbColor: _statusColor,
+                thumbIcon: WidgetStatePropertyAll(
+                  Icon(icon, color: Palette.background),
+                ),
+              ),
+            ),
           ),
-        ),
+          if (connected && _delay.isNotEmpty)
+            Text(_delay, style: const TextStyle(color: Palette.secondaryText)),
+        ],
       ),
     );
   }
@@ -937,13 +948,7 @@ class _HomePageState extends State<HomePage> {
   Widget _statusBanner(bool busy) {
     final connected = _statusColor == seaGreen;
     final (icon, text, color) = connected
-        ? (
-            Icons.check_circle_rounded,
-            _delay.isEmpty
-                ? 'Your connection is secure'
-                : 'Your connection is secure · $_delay',
-            seaGreen,
-          )
+        ? (Icons.check_circle_rounded, 'Your connection is secure', seaGreen)
         : busy
         ? (Icons.sync_rounded, 'Connecting...', orange)
         : (Icons.error_outline_rounded, 'You are not protected', red);
