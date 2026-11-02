@@ -274,6 +274,46 @@ class Aether {
     ..findProxy = ((_) => 'PROXY 127.0.0.1:$httpPort')
     ..connectionTimeout = const Duration(seconds: 3);
 
+  static final _ansi = RegExp(r'\x1B\[[0-9;]*[A-Za-z]');
+  static final _errorLine = RegExp(
+    r'^Error:\s*(.+)$|\bERROR\b[:\s]+(.+)$|(\bpanicked at\b.*)$',
+  );
+  static final _wrapped = RegExp(r'^Other\("(.*)"\)$');
+
+  // The message of a core output line that reports an error, or null for any other line.
+  static String? coreError(String line) {
+    final m = _errorLine.firstMatch(line.replaceAll(_ansi, '').trim());
+    if (m == null) return null;
+    final text = (m.group(1) ?? m.group(2) ?? m.group(3))!.trim();
+    final inner = _wrapped.firstMatch(text)?.group(1);
+    return inner?.replaceAll(r'\"', '"') ?? text;
+  }
+
+  // The port named by a core error about an occupied local listener, or null for any other error.
+  static int? busyPort(String error) {
+    if (!error.contains('Address already in use')) return null;
+    return int.tryParse(
+      RegExp(r'127\.0\.0\.1:(\d+)').firstMatch(error)?.group(1) ?? '',
+    );
+  }
+
+  static Future<bool> portFree(int port) async {
+    try {
+      await (await ServerSocket.bind('127.0.0.1', port)).close();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // The nearest usable port above an occupied one, or null if none of the next 100 is free.
+  static Future<int?> freePort(int busy, int other) async {
+    for (var p = busy + 1; p <= busy + 100; p++) {
+      if (portError('$p', other) == null && await portFree(p)) return p;
+    }
+    return null;
+  }
+
   static List<String> launchArguments(Preset p, CoreOptions options) {
     final args = p.args
         .split(' ')
@@ -335,12 +375,17 @@ class Aether {
   static Future<int?> waitConnected(
     AetherProcess proc,
     int startupSecs,
-    Cancel ct,
-  ) async {
+    Cancel ct, [
+    Log? step,
+  ]) async {
     final sw = Stopwatch()..start();
     int? upAt;
+    var reportAt = 15000;
     while (!proc.exited) {
-      if (upAt == null && await _portOpen()) upAt = sw.elapsedMilliseconds;
+      if (upAt == null && await _portOpen()) {
+        upAt = sw.elapsedMilliseconds;
+        step?.call('Local proxy ready, testing internet...');
+      }
       if (upAt != null) {
         final ms = await ping(ct);
         if (ms != null) return ms;
@@ -349,6 +394,10 @@ class Aether {
       if (t > startupSecs * 1000 &&
           (upAt == null || t - upAt > connectTimeoutMs))
         return null;
+      if (t >= reportAt) {
+        reportAt += 15000;
+        step?.call('Still connecting: ${t ~/ 1000}s of ${startupSecs}s...');
+      }
       await ct.delay(500);
     }
     return null;

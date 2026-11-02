@@ -49,7 +49,7 @@ logging the response. Input is discarded if the process changed in the meantime.
 ### Limits (not a claim of complete feature parity)
 
 - Expert options are not individually validated against the bundled core. Choose
-  compatible settings; errors are reported in the persistent log.
+  compatible settings; failures appear on the home screen and in the activity log.
 - Settings are in app-private JSON, not encrypted storage. Core logs can expose
   sensitive data, especially at debug/trace level.
 - File-based options require existing app-accessible files; there is no file

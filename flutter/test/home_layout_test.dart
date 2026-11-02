@@ -1,11 +1,40 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:aether_gui/aether.dart';
 import 'package:aether_gui/main.dart';
 
 void main() {
+  testWidgets('a failed connect shows its error on home until dismissed', (
+    tester,
+  ) async {
+    final dir = Directory.systemTemp.createTempSync('aether-error-');
+    Aether.dir = dir.path;
+    Aether.exe = '${dir.path}/missing-core';
+    const channel = MethodChannel('aether');
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (_) async => null);
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(channel, null);
+      dir.deleteSync(recursive: true);
+    });
+    await tester.pumpWidget(
+      MaterialApp(theme: Palette.theme, home: const HomePage()),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Tap to Connect'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('aether binary missing'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Dismiss error'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('aether binary missing'), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   for (final size in [
     const Size(320, 568),
     const Size(844, 390),
