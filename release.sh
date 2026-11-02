@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Usage: ./release.sh 1.0.1
-# Bumps the version of both apps, tests, builds the Windows zip and the Android APK, commits, tags vX.Y.Z,
+# Bumps the version of both apps, tests, builds the Windows zip and one Android APK per CPU, commits, tags vX.Y.Z,
 # and publishes a GitHub release. Check for updates in both apps compares against that tag.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -21,17 +21,19 @@ sed -i "s/^version: [0-9.]*+[0-9]*/version: $v+$((build + 1))/" flutter/pubspec.
 
 dotnet run --project tests/CoreChecks.csproj
 dotnet publish AetherGui.csproj -c Release -o publish
-(cd flutter && flutter test && flutter build apk --release)
+(cd flutter && flutter test && flutter build apk --release --split-per-abi)
 
 # Only what the app needs: never identity files (*.toml hold private keys) or anything else left in publish/.
 out=release-out; rm -rf "$out"; mkdir -p "$out/AetherGui"
 cp -r publish/AetherGui.exe publish/aether.exe publish/pt publish/LICENSES "$out/AetherGui/"
 (cd "$out" && python -I -m zipfile -c "AetherGui-$v-windows-x64.zip" AetherGui)
-cp flutter/build/app/outputs/flutter-apk/app-release.apk "$out/AetherGui-$v-android.apk"
+for f in flutter/build/app/outputs/flutter-apk/app-*-release.apk; do # one APK per CPU: arm64-v8a, armeabi-v7a, x86_64
+  a=${f##*/app-}; cp "$f" "$out/AetherGui-$v-android-${a%-release.apk}.apk"
+done
 
 git add AetherGui.csproj flutter/pubspec.yaml
 git commit -m "Release v$v"
 git tag "v$v"
 git push origin HEAD "v$v"
-"$gh" release create "v$v" "$out/AetherGui-$v-windows-x64.zip" "$out/AetherGui-$v-android.apk" --title "v$v" --generate-notes
+"$gh" release create "v$v" "$out/AetherGui-$v-windows-x64.zip" "$out"/AetherGui-$v-android-*.apk --title "v$v" --generate-notes
 echo "Released v$v"

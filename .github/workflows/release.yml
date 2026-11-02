@@ -96,14 +96,17 @@ jobs:
           keyPassword=$KEY_PASSWORD
           PROPS
 
-      - run: flutter build apk --release
+      - run: flutter build apk --release --split-per-abi
 
-      - run: mv build/app/outputs/flutter-apk/app-release.apk "AetherGui-$VERSION-android.apk"
+      - run: |
+          for f in build/app/outputs/flutter-apk/app-*-release.apk; do
+            a=${f##*/app-}; mv "$f" "AetherGui-$VERSION-android-${a%-release.apk}.apk"
+          done
 
       - uses: actions/upload-artifact@v4
         with:
           name: android
-          path: flutter/AetherGui-${{ inputs.version }}-android.apk
+          path: flutter/AetherGui-${{ inputs.version }}-android-*.apk
           if-no-files-found: error
 
   windows:
