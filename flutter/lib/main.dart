@@ -666,7 +666,7 @@ class _HomePageState extends State<HomePage> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const SizedBox(height: 16),
-                  Center(child: _powerButton(busy)),
+                  _powerButton(busy),
                   const SizedBox(height: 24),
                   _routeLine(busy),
                   const SizedBox(height: 32),
@@ -691,82 +691,38 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // The big round button: red when off, amber with a spinning ring while connecting, green when on.
+  // On/off switch: red when off, amber with a spinner while connecting, green when on.
   // Color is never the only signal: each state also has its own icon and text.
   Widget _powerButton(bool busy) {
     final connected = _statusColor == seaGreen;
     final connecting = busy && !connected;
     final color = _statusColor;
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
     final (icon, label, detail) = connected
         ? (Icons.shield_rounded, 'Connected', _delay)
         : connecting
         ? (Icons.sync_rounded, 'Connecting...', 'Tap to cancel')
         : (Icons.power_settings_new_rounded, 'Tap to Connect', '');
-    return Semantics(
-      button: true,
-      label: busy ? 'Disconnect' : 'Connect',
-      child: SizedBox.square(
-        dimension: 228,
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            if (connecting)
-              SizedBox.expand(
+    return Card(
+      child: SwitchListTile(
+        value: busy,
+        onChanged: (_) => _connect(),
+        activeThumbColor: color,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+        secondary: connecting
+            ? SizedBox.square(
+                dimension: 28,
                 child: CircularProgressIndicator(
                   strokeWidth: 3,
                   color: color,
-                  value: reduceMotion ? 1 : null,
+                  value: MediaQuery.disableAnimationsOf(context) ? 1 : null,
                 ),
-              ),
-            AnimatedContainer(
-              duration: reduceMotion
-                  ? Duration.zero
-                  : const Duration(milliseconds: 300),
-              width: 200,
-              height: 200,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Palette.surface,
-                border: Border.all(color: color, width: 3),
-                boxShadow: [
-                  BoxShadow(
-                    color: color.withValues(alpha: 0.35),
-                    blurRadius: 40,
-                    spreadRadius: 4,
-                  ),
-                ],
-              ),
-              child: Material(
-                type: MaterialType.transparency,
-                shape: const CircleBorder(),
-                clipBehavior: Clip.antiAlias,
-                child: InkWell(
-                  onTap: _connect,
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(icon, size: 64, color: color),
-                      const SizedBox(height: 12),
-                      Text(
-                        label,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      if (detail.isNotEmpty)
-                        Text(
-                          detail,
-                          style: const TextStyle(color: Palette.secondaryText),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ],
+              )
+            : Icon(icon, size: 28, color: color),
+        title: Text(
+          label,
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
         ),
+        subtitle: detail.isEmpty ? null : Text(detail),
       ),
     );
   }
