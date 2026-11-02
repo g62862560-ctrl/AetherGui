@@ -25,7 +25,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Tap to Connect'));
+    await tester.tap(find.bySemanticsLabel('Connect'));
     await tester.pumpAndSettle();
     expect(find.textContaining('aether binary missing'), findsOneWidget);
 
@@ -58,8 +58,8 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Home: the round button, quick settings and the status banner; nothing technical.
-      expect(find.text('Tap to Connect'), findsOneWidget);
+      // Home: the connect switch, quick settings and the status banner; nothing technical.
+      expect(find.bySemanticsLabel('Connect'), findsOneWidget);
       expect(find.text('Auto - fastest route'), findsOneWidget);
       expect(find.text('You are not protected'), findsOneWidget);
       expect(find.byType(DropdownMenu<int>), findsNothing);

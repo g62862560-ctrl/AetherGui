@@ -33,6 +33,7 @@ abstract final class Palette {
 
   static final theme = ThemeData(
     brightness: Brightness.dark,
+    visualDensity: VisualDensity.compact,
     scaffoldBackgroundColor: background,
     colorScheme: ColorScheme.fromSeed(
       seedColor: accent,
@@ -79,13 +80,18 @@ class _HomePageState extends State<HomePage> {
   bool _showActivity = true;
   String _status = 'Disconnected';
   Color _statusColor = red;
-  String _delay = ''; // e.g. '24 ms', shown in the button while connected
+  String _delay =
+      ''; // e.g. '24 ms', shown in the status banner while connected
   String? _route; // preset being tried or used right now
   String? _error; // latest failure, shown on Home until connected or dismissed
-  int? _busyPort, _freePort; // occupied port behind _error, and a free one to offer
+  int? _busyPort,
+      _freePort; // occupied port behind _error, and a free one to offer
   final _changes = ValueNotifier(0); // tells an open Settings page to rebuild
   final _lines = <(String, Color?)>[];
-  final _steps = <(String, Color?)>[]; // this connect's report on Home; no color = in progress
+  final _steps =
+      <
+        (String, Color?)
+      >[]; // this connect's report on Home; no color = in progress
   final _scroll = ScrollController();
   final _httpPortText = TextEditingController(),
       _socksPortText = TextEditingController();
@@ -315,10 +321,10 @@ class _HomePageState extends State<HomePage> {
 
   // Every preset needs this port, so rotating on cannot help: stop and let the user choose.
   Future<void> _portInUse(int port, Cancel ct) async {
-    final other = port == Aether.socksPort
-        ? Aether.httpPort
-        : Aether.socksPort;
-    _logError('Port $port is in use by another app. Close it or pick a new port.');
+    final other = port == Aether.socksPort ? Aether.httpPort : Aether.socksPort;
+    _logError(
+      'Port $port is in use by another app. Close it or pick a new port.',
+    );
     _addStep('Port $port is in use.', red);
     if (mounted) setState(() => _busyPort = port);
     ct.cancel();
@@ -339,9 +345,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _enterPort(int busy) async {
-    final other = busy == Aether.socksPort
-        ? Aether.httpPort
-        : Aether.socksPort;
+    final other = busy == Aether.socksPort ? Aether.httpPort : Aether.socksPort;
     final input = TextEditingController(text: _freePort?.toString() ?? '');
     final port = await showDialog<int>(
       context: context,
@@ -352,8 +356,7 @@ class _HomePageState extends State<HomePage> {
             Future<void> submit() async {
               final problem = Aether.portError(input.text, other);
               final port = int.tryParse(input.text);
-              final taken =
-                  problem == null && !await Aether.portFree(port!);
+              final taken = problem == null && !await Aether.portFree(port!);
               if (!context.mounted) return;
               if (problem == null && !taken) {
                 Navigator.pop(context, port);
@@ -414,10 +417,8 @@ class _HomePageState extends State<HomePage> {
     final order = await Navigator.push<List<int>>(
       context,
       MaterialPageRoute(
-        builder: (_) => AutoOrderPage(
-          order: _autoIndexes(_order),
-          ranking: _autoIndexes(),
-        ),
+        builder: (_) =>
+            AutoOrderPage(order: _autoIndexes(_order), ranking: _autoIndexes()),
       ),
     );
     if (!mounted || order == null) return;
@@ -479,7 +480,9 @@ class _HomePageState extends State<HomePage> {
     void tell(String msg) {
       _log(msg);
       if (interactive && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(msg)));
       }
     }
 
@@ -636,16 +639,9 @@ class _HomePageState extends State<HomePage> {
     final busy = _ct != null;
     return Scaffold(
       appBar: AppBar(
-        toolbarHeight: 72,
-        title: const Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Aether', style: TextStyle(fontWeight: FontWeight.w700)),
-            Text(
-              'Private Network Client',
-              style: TextStyle(fontSize: 12, color: Palette.secondaryText),
-            ),
-          ],
+        title: const Text(
+          'Aether',
+          style: TextStyle(fontWeight: FontWeight.w700),
         ),
         actions: [
           IconButton(
@@ -659,28 +655,27 @@ class _HomePageState extends State<HomePage> {
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.all(16),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 480),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const SizedBox(height: 16),
-                  _powerButton(busy),
-                  const SizedBox(height: 24),
+                  Center(child: _powerButton(busy)),
+                  const SizedBox(height: 12),
                   _routeLine(busy),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 16),
                   if (_error != null) ...[
                     _errorCard(_error!, busy),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 8),
                   ],
                   if (_steps.isNotEmpty) ...[
                     _stepsCard(busy),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 8),
                   ],
-                  if (!_vpn) ...[_proxyCard(), const SizedBox(height: 16)],
+                  if (!_vpn) ...[_proxyCard(), const SizedBox(height: 8)],
                   _quickSettings(),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 8),
                   _statusBanner(busy),
                 ],
               ),
@@ -691,38 +686,31 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // On/off switch: red when off, amber with a spinner while connecting, green when on.
-  // Color is never the only signal: each state also has its own icon and text.
+  // Medium on/off switch, no text: red when off, amber while connecting, green when on.
+  // The thumb icon and the status banner below carry the state too, so color is never the only signal.
   Widget _powerButton(bool busy) {
     final connected = _statusColor == seaGreen;
-    final connecting = busy && !connected;
-    final color = _statusColor;
-    final (icon, label, detail) = connected
-        ? (Icons.shield_rounded, 'Connected', _delay)
-        : connecting
-        ? (Icons.sync_rounded, 'Connecting...', 'Tap to cancel')
-        : (Icons.power_settings_new_rounded, 'Tap to Connect', '');
-    return Card(
-      child: SwitchListTile(
-        value: busy,
-        onChanged: (_) => _connect(),
-        activeThumbColor: color,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-        secondary: connecting
-            ? SizedBox.square(
-                dimension: 28,
-                child: CircularProgressIndicator(
-                  strokeWidth: 3,
-                  color: color,
-                  value: MediaQuery.disableAnimationsOf(context) ? 1 : null,
-                ),
-              )
-            : Icon(icon, size: 28, color: color),
-        title: Text(
-          label,
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+    final icon = connected
+        ? Icons.shield_rounded
+        : busy
+        ? Icons.sync_rounded
+        : Icons.power_settings_new_rounded;
+    return Semantics(
+      label: connected
+          ? 'Connected'
+          : busy
+          ? 'Connecting, tap to cancel'
+          : 'Connect',
+      child: Transform.scale(
+        scale: 1.5,
+        child: Switch(
+          value: busy,
+          onChanged: (_) => _connect(),
+          activeThumbColor: _statusColor,
+          thumbIcon: WidgetStatePropertyAll(
+            Icon(icon, color: Palette.background),
+          ),
         ),
-        subtitle: detail.isEmpty ? null : Text(detail),
       ),
     );
   }
@@ -909,9 +897,9 @@ class _HomePageState extends State<HomePage> {
                 icon: const Icon(Icons.copy_rounded, size: 20),
                 onPressed: () {
                   Clipboard.setData(ClipboardData(text: error));
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Error copied')),
-                  );
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(const SnackBar(content: Text('Error copied')));
                 },
               ),
               IconButton(
@@ -949,12 +937,18 @@ class _HomePageState extends State<HomePage> {
   Widget _statusBanner(bool busy) {
     final connected = _statusColor == seaGreen;
     final (icon, text, color) = connected
-        ? (Icons.check_circle_rounded, 'Your connection is secure', seaGreen)
+        ? (
+            Icons.check_circle_rounded,
+            _delay.isEmpty
+                ? 'Your connection is secure'
+                : 'Your connection is secure · $_delay',
+            seaGreen,
+          )
         : busy
         ? (Icons.sync_rounded, 'Connecting...', orange)
         : (Icons.error_outline_rounded, 'You are not protected', red);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.10),
         borderRadius: BorderRadius.circular(24),
@@ -1028,10 +1022,7 @@ class _HomePageState extends State<HomePage> {
             enabled: !busy, // pick before connecting; Disconnect to change
             initialSelection: _preset,
             dropdownMenuEntries: [
-              const DropdownMenuEntry(
-                value: -1,
-                label: 'Auto (order below)',
-              ),
+              const DropdownMenuEntry(value: -1, label: 'Auto (order below)'),
               // Keep persisted values stable while displaying fast presets first.
               for (final manualOnly in [false, true])
                 for (final (i, p) in Aether.presets.indexed)
@@ -1053,10 +1044,10 @@ class _HomePageState extends State<HomePage> {
             leading: const Icon(Icons.low_priority_rounded),
             title: const Text('Auto order'),
             subtitle: Text(
-              Aether.autoOrder(_connectMs, _order)
-                  .take(3)
-                  .map((p) => p.name)
-                  .join(' > '),
+              Aether.autoOrder(
+                _connectMs,
+                _order,
+              ).take(3).map((p) => p.name).join(' > '),
               overflow: TextOverflow.ellipsis,
             ),
             enabled: !busy,
