@@ -6,7 +6,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <!-- Compared with the tag of the latest GitHub release (vX.Y.Z) by Check for updates -->
-    <Version>1.0.9</Version>
+    <Version>1.0.10</Version>
     <!-- dotnet publish -c Release -> one standalone exe, no .NET install needed -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
