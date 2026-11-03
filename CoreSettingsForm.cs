@@ -7,6 +7,7 @@ sealed class CoreSettingsForm : Form
     private readonly TextBox _environment = Editor();
     private readonly NumericUpDown _timeout = new() { Minimum = 30, Maximum = 3600, Width = 120 };
     private readonly NumericUpDown _port = new() { Minimum = 1024, Maximum = 65535, Width = 100, Value = Aether.ProxyPort, AccessibleName = "Proxy port (HTTP and SOCKS5)" };
+    private readonly ComboBox _testUrl = new() { DropDownStyle = ComboBoxStyle.DropDown, Width = 420, Text = Aether.TestUrl, AccessibleName = "Delay test URL" };
     private readonly IReadOnlyDictionary<int, int> _connectMs;
     private readonly CheckedListBox _order = new() { Dock = DockStyle.Fill, CheckOnClick = true, IntegralHeight = false, DisplayMember = nameof(Preset.Label), AccessibleName = "Auto protocol order" };
     private readonly CancellationTokenSource _helpCancellation = new(TimeSpan.FromSeconds(10));
@@ -67,6 +68,10 @@ sealed class CoreSettingsForm : Form
         var portRow = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
         portRow.Controls.AddRange([new Label { Text = "Proxy port (HTTP + SOCKS5)", AutoSize = true }, _port]);
         Add(portRow);
+        _testUrl.Items.AddRange(Aether.TestUrlSuggestions); // editable: pick one or type your own
+        var urlRow = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
+        urlRow.Controls.AddRange([new Label { Text = "Delay test URL", AutoSize = true }, _testUrl]);
+        Add(urlRow);
         // Under the tabs, so the one Save also saves the Auto order tab.
         var buttons = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Bottom, Padding = new Padding(6) };
         var save = new Button { Text = "Save", AutoSize = true, MinimumSize = new Size(75, 23), Font = new Font("Segoe UI", 9F, FontStyle.Bold) }; // bold like the main window's primary button
@@ -76,7 +81,7 @@ sealed class CoreSettingsForm : Form
         reset.Click += (_, _) =>
         {
             _arguments.Text = "[]"; _environment.Text = "{}"; _timeout.Value = 300;
-            _port.Value = Aether.DefaultProxyPort; FillOrder(null);
+            _port.Value = Aether.DefaultProxyPort; _testUrl.Text = Aether.DefaultTestUrl; FillOrder(null);
         };
         buttons.Controls.AddRange([save, reset, cancel]);
         settings.Controls.Add(layout); tabs.TabPages.AddRange([settings, orderTab, helpTab]); Controls.AddRange([tabs, buttons]);
@@ -151,12 +156,13 @@ sealed class CoreSettingsForm : Form
     {
         var port = (int)_port.Value;
         if (Aether.ValidPort(port) is string error) { MessageBox.Show(this, error, Text); return; }
+        if (Aether.ValidTestUrl(_testUrl.Text) is string urlError) { MessageBox.Show(this, urlError, Text); return; }
         var order = _order.CheckedItems.Cast<Preset>().Select(p => Array.IndexOf(Aether.Presets, p)).ToArray();
         if (order.Length == 0) { MessageBox.Show(this, "Check at least one protocol for Auto.", Text); return; }
         try
         {
             var options = CoreOptions.Parse(_arguments.Text, _environment.Text, (int)_timeout.Value);
-            options.Save(); Aether.ProxyPort = port; Aether.SavedOrder = order; Options = options; DialogResult = DialogResult.OK; Close();
+            options.Save(); Aether.ProxyPort = port; Aether.TestUrl = _testUrl.Text.Trim(); Aether.SavedOrder = order; Options = options; DialogResult = DialogResult.OK; Close();
         }
         catch (Exception ex) when (ex is System.Text.Json.JsonException or FormatException)
         { MessageBox.Show(this, "Invalid JSON/settings. Use string arrays and string environment values; do not override managed protocols or ports.", Text); }

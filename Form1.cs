@@ -66,7 +66,8 @@ public partial class Form1 : Form
             await Task.Delay(StartupDelayMs);
             if (chkStartup.Checked && _cts == null && btnConnect.Enabled) btnConnect_Click(null, EventArgs.Empty); // not while a core update installs
         };
-        FormClosing += (_, _) => { _cts?.Cancel(); KillProcess(); Psiphon.Kill(); SystemProxy.Disable(); };
+        _buttonTimer.Tick += (_, _) => btnConnect.BackColor = LightColorAt(_buttonClock.Elapsed.TotalSeconds / 4);
+        FormClosing += (_, _) => { _buttonTimer.Dispose(); _cts?.Cancel(); KillProcess(); Psiphon.Kill(); SystemProxy.Disable(); };
     }
 
     private static readonly Bitmap PsiphonIcon = new(typeof(Form1).Assembly.GetManifestResourceStream("psiphon.png")!);
@@ -149,6 +150,7 @@ public partial class Form1 : Form
             KillProcess();
             SetStatus("Disconnected", Palette.Disconnected);
             lblDelay.Text = "Delay: -";
+            lblDelay.ForeColor = SystemColors.ControlText;
         }
     }
 
@@ -182,6 +184,7 @@ public partial class Form1 : Form
         for (int fails = 0; fails < 2;)
         {
             lblDelay.Text = ms is null ? "Delay: timeout" : $"Delay: {ms} ms";
+            lblDelay.ForeColor = PingColor(ms);
             await Task.Delay(5000, ct);
             if (proc.HasExited) break;
             ms = await Aether.PingAsync(ct);
@@ -339,6 +342,37 @@ public partial class Form1 : Form
         lblStatus.AccessibleName = "Connection status: " + text;
         lblStatus.ForeColor = color;
         prgConnecting.Visible = color == Palette.Connecting;
+        AnimateConnectButton(color == Palette.Connecting);
+    }
+
+    // Light colors the Connect button drifts through while connecting, same as the Android app; t runs 0..1.
+    internal static readonly Color[] LightColors =
+        [ColorTranslator.FromHtml("#FDE68A"), ColorTranslator.FromHtml("#FBCFE8"), ColorTranslator.FromHtml("#DDD6FE"),
+         ColorTranslator.FromHtml("#BAE6FD"), ColorTranslator.FromHtml("#BBF7D0")];
+    internal static Color LightColorAt(double t)
+    {
+        double x = (t - Math.Floor(t)) * LightColors.Length, f = x - Math.Floor(x);
+        Color a = LightColors[(int)x % LightColors.Length], b = LightColors[((int)x + 1) % LightColors.Length];
+        int Mix(int from, int to) => (int)Math.Round(from + (to - from) * f);
+        return Color.FromArgb(Mix(a.R, b.R), Mix(a.G, b.G), Mix(a.B, b.B));
+    }
+
+    private readonly System.Windows.Forms.Timer _buttonTimer = new() { Interval = 50 };
+    private readonly Stopwatch _buttonClock = new();
+
+    // Only the fill color changes; size and shape stay. Holds one color when Windows animations are off.
+    private void AnimateConnectButton(bool on)
+    {
+        if (on == _buttonClock.IsRunning) return; // already in that state
+        if (!on)
+        {
+            _buttonTimer.Stop(); _buttonClock.Reset();
+            btnConnect.UseVisualStyleBackColor = true; // back to the normal Windows button
+            return;
+        }
+        _buttonClock.Restart();
+        btnConnect.BackColor = LightColors[0];
+        if (SystemInformation.UIEffectsEnabled) _buttonTimer.Start();
     }
 
     private void Log(string msg) => Log(msg, null);
@@ -367,6 +401,11 @@ public partial class Form1 : Form
             txtMiniLog.ScrollToCaret();
         }
     }
+
+    // Green when fast, amber when slow, red when very slow or timed out.
+    internal static Color PingColor(int? ms) =>
+        ms is null || ms >= Aether.SlowPingMs ? Palette.Disconnected
+        : ms < Aether.GoodPingMs ? Palette.Connected : Palette.Connecting;
 
     // Lines without their own color get one from what they say, in the classic palette.
     internal static Color LogColor(string msg) =>

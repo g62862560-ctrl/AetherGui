@@ -63,7 +63,7 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  static const maxSteps = 8; // lines kept in the connection report on Home
+  static const maxSteps = 4; // lines kept in the connection report on Home
   static const startupDelayMs =
       1000; // pause before the automatic connect on startup
   static const red = Palette.disconnected,
@@ -80,8 +80,7 @@ class _HomePageState extends State<HomePage> {
   bool _showActivity = true;
   String _status = 'Disconnected';
   Color _statusColor = red;
-  String _delay =
-      ''; // e.g. '24 ms', shown in the status banner while connected
+  String _delay = ''; // e.g. '24 ms', shown beside the route while connected
   String? _route; // preset being tried or used right now
   String? _error; // latest failure, shown on Home until connected or dismissed
   int? _busyPort,
@@ -94,7 +93,8 @@ class _HomePageState extends State<HomePage> {
       >[]; // this connect's report on Home; no color = in progress
   final _scroll = ScrollController();
   final _httpPortText = TextEditingController(),
-      _socksPortText = TextEditingController();
+      _socksPortText = TextEditingController(),
+      _testUrlText = TextEditingController();
   // preset index -> ms its last connect took, -1 = failed; orders Auto
   var _connectMs = <int, int>{};
   // Auto's order as preset indexes, kept current after each connect and editable; empty = speed ranking
@@ -124,6 +124,8 @@ class _HomePageState extends State<HomePage> {
         Aether.httpPort = int.parse(http);
         Aether.socksPort = int.parse(socks);
       }
+      final url = RegExp(r'TestUrl=(.*)').firstMatch(s)?.group(1)?.trim();
+      if (url != null && Aether.testUrlError(url) == null) Aether.testUrl = url;
       _connectMs = Aether.parseConnectMs(
         RegExp(r'ConnectMs=(.*)').firstMatch(s)?.group(1),
       );
@@ -143,6 +145,7 @@ class _HomePageState extends State<HomePage> {
     if (_order.isEmpty) _order = _autoIndexes();
     _httpPortText.text = '${Aether.httpPort}';
     _socksPortText.text = '${Aether.socksPort}';
+    _testUrlText.text = Aether.testUrl;
     _checkUpdates(interactive: false);
     if (_autoConnect) {
       _log('Auto-connecting in ${startupDelayMs ~/ 1000}s...');
@@ -159,6 +162,7 @@ class _HomePageState extends State<HomePage> {
     _scroll.dispose();
     _httpPortText.dispose();
     _socksPortText.dispose();
+    _testUrlText.dispose();
     _changes.dispose();
     super.dispose();
   }
@@ -180,6 +184,7 @@ class _HomePageState extends State<HomePage> {
     'Mode=${_vpn ? 'vpn' : 'proxy'}\n'
     'ShowActivity=${_showActivity ? 1 : 0}\n'
     'HttpPort=${Aether.httpPort}\nSocksPort=${Aether.socksPort}\n'
+    'TestUrl=${Aether.testUrl}\n'
     'ConnectMs=${Aether.formatConnectMs(_connectMs)}\n'
     'AutoOrder=${_order.join(',')}\n',
   );
@@ -578,6 +583,16 @@ class _HomePageState extends State<HomePage> {
       });
   }
 
+  // Green when fast, amber when slow, red when very slow or timed out.
+  static Color _pingColor(String delay) {
+    final ms = int.tryParse(delay.split(' ').first);
+    return ms == null || ms >= Aether.slowPingMs
+        ? Palette.disconnected
+        : ms < Aether.goodPingMs
+        ? Palette.connected
+        : Palette.connecting;
+  }
+
   void _setDelay(String text) {
     if (mounted) setState(() => _delay = text);
   }
@@ -653,7 +668,8 @@ class _HomePageState extends State<HomePage> {
         ],
       ),
       body: SafeArea(
-        child: Center(
+        child: Align(
+          alignment: Alignment.topCenter,
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(16),
             child: ConstrainedBox(
@@ -661,10 +677,40 @@ class _HomePageState extends State<HomePage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Center(child: _powerButton(busy)),
+                  // Button and route share one row so the top of the screen is not mostly empty.
+                  Row(
+                    children: [
+                      _powerButton(busy),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _routeLine(busy),
+                            if (_statusColor == seaGreen && _delay.isNotEmpty)
+                              Text.rich(
+                                TextSpan(
+                                  text: 'Ping ',
+                                  style: const TextStyle(
+                                    color: Palette.secondaryText,
+                                  ),
+                                  children: [
+                                    TextSpan(
+                                      text: _delay,
+                                      style: TextStyle(
+                                        color: _pingColor(_delay),
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 12),
-                  _routeLine(busy),
-                  const SizedBox(height: 16),
                   if (_error != null) ...[
                     _errorCard(_error!, busy),
                     const SizedBox(height: 8),
@@ -675,8 +721,6 @@ class _HomePageState extends State<HomePage> {
                   ],
                   if (!_vpn) ...[_proxyCard(), const SizedBox(height: 8)],
                   _quickSettings(),
-                  const SizedBox(height: 8),
-                  _statusBanner(busy),
                 ],
               ),
             ),
@@ -686,14 +730,40 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // Large on/off switch: red when off, amber while connecting, green when on; the ping shows below it.
-  // The thumb icon and the status banner below carry the state too, so color is never the only signal.
+  // Large square on/off button: red when off, cycling light colors while connecting, green when on; the ping shows beside it.
+  // The icon (power, cancel, shield) and the screen-reader label carry the state too, so color is never the only signal.
+  Widget _squareButton(Color color, IconData icon) => FilledButton(
+    onPressed: _connect,
+    style: FilledButton.styleFrom(
+      backgroundColor: color,
+      padding: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    ),
+    child: Icon(icon, size: 40, color: Palette.background),
+  );
+
+  // Light colors the connecting button cycles through, blended smoothly; t runs 0..1.
+  static const _lightColors = [
+    Color(0xFFFDE68A), // amber
+    Color(0xFFFBCFE8), // pink
+    Color(0xFFDDD6FE), // lilac
+    Color(0xFFBAE6FD), // sky
+    Color(0xFFBBF7D0), // mint
+  ];
+  static Color _lightColorAt(double t) {
+    final x = t * _lightColors.length;
+    final i = x.floor() % _lightColors.length;
+    return Color.lerp(
+      _lightColors[i],
+      _lightColors[(i + 1) % _lightColors.length],
+      x - x.floor(),
+    )!;
+  }
+
   Widget _powerButton(bool busy) {
     final connected = _statusColor == seaGreen;
     final icon = connected
         ? Icons.shield_rounded
-        : busy
-        ? Icons.sync_rounded
         : Icons.power_settings_new_rounded;
     return Semantics(
       label: connected
@@ -701,27 +771,16 @@ class _HomePageState extends State<HomePage> {
           : busy
           ? 'Connecting, tap to cancel'
           : 'Connect',
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // 3x the default switch; FittedBox reserves the space, unlike Transform.scale.
-          SizedBox(
-            width: 156,
-            height: 96,
-            child: FittedBox(
-              child: Switch(
-                value: busy,
-                onChanged: (_) => _connect(),
-                activeThumbColor: _statusColor,
-                thumbIcon: WidgetStatePropertyAll(
-                  Icon(icon, color: Palette.background),
-                ),
-              ),
-            ),
-          ),
-          if (connected && _delay.isNotEmpty)
-            Text(_delay, style: const TextStyle(color: Palette.secondaryText)),
-        ],
+      // Square toggle button filled with the status color; while connecting it drifts through light colors.
+      child: SizedBox.square(
+        dimension: 80,
+        child: busy && !connected
+            ? _Loop(
+                period: const Duration(seconds: 4),
+                builder: (t) =>
+                    _squareButton(_lightColorAt(t), Icons.close_rounded),
+              )
+            : _squareButton(_statusColor, icon),
       ),
     );
   }
@@ -732,7 +791,6 @@ class _HomePageState extends State<HomePage> {
         _route ??
         (_preset < 0 ? 'Auto - fastest route' : Aether.presets[_preset].name);
     return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
       children: [
         const Icon(Icons.bolt_rounded, size: 20, color: Palette.accent),
         const SizedBox(width: 8),
@@ -866,14 +924,37 @@ class _HomePageState extends State<HomePage> {
     ),
   );
 
+  // 1 at the start of each cycle, fading to 0 by its middle; t may be negative.
+  static double _pulse(double t) {
+    final p = t - t.floorToDouble();
+    return p < 0.5 ? 1 - p * 2 : 0;
+  }
+
   // Color is never the only signal: running, done and failed each have their own icon.
   Widget _stepIcon(Color? color, bool current) {
     if (color == null) {
+      // Three dots pulsing one after another for the running step.
       return current
-          ? CircularProgressIndicator(
-              strokeWidth: 2,
-              color: orange,
-              value: MediaQuery.disableAnimationsOf(context) ? 1 : null,
+          ? _Loop(
+              period: const Duration(milliseconds: 1200),
+              builder: (t) => Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  for (var d = 0; d < 3; d++)
+                    Opacity(
+                      opacity: 0.3 + 0.7 * _pulse(t - d / 3),
+                      child: const SizedBox.square(
+                        dimension: 5,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: orange,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             )
           : const Icon(Icons.check_rounded, size: 20, color: seaGreen);
     }
@@ -944,29 +1025,6 @@ class _HomePageState extends State<HomePage> {
       ),
     ),
   );
-
-  Widget _statusBanner(bool busy) {
-    final connected = _statusColor == seaGreen;
-    final (icon, text, color) = connected
-        ? (Icons.check_circle_rounded, 'Your connection is secure', seaGreen)
-        : busy
-        ? (Icons.sync_rounded, 'Connecting...', orange)
-        : (Icons.error_outline_rounded, 'You are not protected', red);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.10),
-        borderRadius: BorderRadius.circular(24),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: color),
-          const SizedBox(width: 12),
-          Expanded(child: Text(text)),
-        ],
-      ),
-    );
-  }
 
   // ---------- Settings: everything technical lives here ----------
 
@@ -1081,6 +1139,37 @@ class _HomePageState extends State<HomePage> {
                     setState(() => _scan = v.first);
                     _saveSettings();
                   },
+          ),
+          const SizedBox(height: 16),
+          // Typed URLs are saved once valid; the menu offers well-known ones.
+          TextField(
+            controller: _testUrlText,
+            keyboardType: TextInputType.url,
+            decoration: InputDecoration(
+              labelText: 'Delay test URL',
+              helperText: 'Any http(s) page; the ping is how long it takes',
+              errorText: Aether.testUrlError(_testUrlText.text),
+              suffixIcon: PopupMenuButton<String>(
+                tooltip: 'Suggested URLs',
+                icon: const Icon(Icons.arrow_drop_down_rounded),
+                itemBuilder: (_) => [
+                  for (final u in Aether.testUrlSuggestions)
+                    PopupMenuItem(value: u, child: Text(u)),
+                ],
+                onSelected: (u) {
+                  _testUrlText.text = Aether.testUrl = u;
+                  _saveSettings();
+                  setState(() {});
+                },
+              ),
+            ),
+            onChanged: (v) {
+              if (Aether.testUrlError(v) == null) {
+                Aether.testUrl = v.trim();
+                _saveSettings();
+              }
+              setState(() {});
+            },
           ),
           const SizedBox(height: 16),
           const Text('Mode'),
@@ -1219,4 +1308,36 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
+}
+
+// Rebuilds with t running 0..1 again and again; holds still at 0 when the system asks for reduced motion.
+class _Loop extends StatefulWidget {
+  const _Loop({required this.period, required this.builder});
+  final Duration period;
+  final Widget Function(double t) builder;
+
+  @override
+  State<_Loop> createState() => _LoopState();
+}
+
+class _LoopState extends State<_Loop> with SingleTickerProviderStateMixin {
+  late final _c = AnimationController(vsync: this, duration: widget.period);
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    MediaQuery.disableAnimationsOf(context) ? _c.stop() : _c.repeat();
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _c,
+    builder: (_, _) => widget.builder(_c.value),
+  );
 }

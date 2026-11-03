@@ -16,7 +16,17 @@ record Preset(string Name, string Args, int StartupSecs = Aether.FastSecs, strin
 // Everything about aether.exe itself: where it lives, downloading it, starting it, and testing its tunnel.
 static class Aether
 {
-    private const string TestUrl = "http://www.gstatic.com/generate_204";
+    public const string DefaultTestUrl = "http://www.gstatic.com/generate_204";
+    // Offered in Core settings; the user may also type any http(s) URL.
+    public static readonly string[] TestUrlSuggestions =
+    [
+        DefaultTestUrl,
+        "http://cp.cloudflare.com/generate_204",
+        "https://www.google.com/generate_204",
+        "https://www.cloudflare.com/cdn-cgi/trace",
+        "http://www.msftconnecttest.com/connecttest.txt",
+    ];
+    public const int GoodPingMs = 300, SlowPingMs = 800; // ping colors: below good green, below slow amber, else red
     private const int ConnectTimeoutMs = 10_000; // after the proxy is up, the internet test must pass within this
     // The core's own listeners; users and the system proxy use the mixed ProxyPort in front of them.
     public const int SocksPort = 1818;           // SOCKS5, also used for the delay test
@@ -40,6 +50,25 @@ static class Aether
             key.SetValue("ProxyPort", value);
         }
     }
+
+    public static string TestUrl
+    {
+        get
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(PortsKey);
+            return key?.GetValue("TestUrl") is string u && ValidTestUrl(u) is null ? u : DefaultTestUrl;
+        }
+        set
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(PortsKey);
+            key.SetValue("TestUrl", value);
+        }
+    }
+
+    // null when usable, otherwise why not.
+    public static string? ValidTestUrl(string text) =>
+        Uri.TryCreate(text.Trim(), UriKind.Absolute, out var u) && u.Scheme is "http" or "https" && u.Host.Length > 0
+            ? null : "Delay test URL must be a full http:// or https:// URL.";
 
     // null when usable, otherwise why not.
     public static string? ValidPort(int port) =>
@@ -253,7 +282,7 @@ static class Aether
         };
         foreach (var arg in args) info.ArgumentList.Add(arg);
         info.Environment["AETHER_SCAN"] = scan;
-        info.Environment["AETHER_IP"] = "4";
+        info.Environment["AETHER_IP"] = "v4"; // the core accepts v4, v6 or both
         info.Environment["AETHER_QUICK_RECONNECT"] = "1";
         foreach (var (key, value) in options.EnvironmentVariables) info.Environment[key] = value;
         return info;
@@ -338,7 +367,8 @@ static class Aether
             using var req = new HttpRequestMessage(HttpMethod.Get, TestUrl);
             req.Headers.ConnectionClose = true;
             using var res = await Http.SendAsync(req, ct);
-            return res.StatusCode == HttpStatusCode.NoContent ? (int)sw.ElapsedMilliseconds : null;
+            // Any success counts, since user URLs may answer 200 rather than 204.
+            return (int)res.StatusCode < 400 ? (int)sw.ElapsedMilliseconds : null;
         }
         catch (Exception) when (!ct.IsCancellationRequested) { return null; }
     }

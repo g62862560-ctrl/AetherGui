@@ -163,6 +163,13 @@ static class Checks
         Check(Form1.LogColor("Switching to WireGuard") == Palette.Connecting, "Route switches are amber in the log");
         Check(Form1.LogColor("Connected: MASQUE") == Palette.Connected, "Connections are green in the log");
         Check(Form1.LogColor("Disconnected") == Color.Black, "Disconnected is not mistaken for connected");
+        Check(Form1.PingColor(120) == Palette.Connected && Form1.PingColor(500) == Palette.Connecting
+            && Form1.PingColor(900) == Palette.Disconnected && Form1.PingColor(null) == Palette.Disconnected, "Ping colors follow the thresholds");
+        Check(Form1.LightColorAt(0).ToArgb() == Form1.LightColors[0].ToArgb() && Form1.LightColorAt(0.2).ToArgb() == Form1.LightColors[1].ToArgb()
+            && Form1.LightColorAt(1).ToArgb() == Form1.LightColors[0].ToArgb() && Form1.LightColorAt(0.1).ToArgb() != Form1.LightColors[0].ToArgb(),
+            "Connecting colors start, step and wrap around smoothly");
+        Check(Aether.ValidTestUrl("https://www.cloudflare.com/cdn-cgi/trace") is null && Aether.ValidTestUrl("ftp://x") is not null
+            && Aether.ValidTestUrl("gstatic.com") is not null, "Delay test URL must be absolute http(s)");
         using var settings = new CoreSettingsForm(new());
         foreach (var size in new[] { new Size(520, 460), new Size(800, 650), new Size(1200, 800) })
         {

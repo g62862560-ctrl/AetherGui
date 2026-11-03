@@ -47,7 +47,10 @@ class _AutoOrderPageState extends State<AutoOrderPage> {
   }
 
   void _save() {
-    final order = [for (final i in _items) if (_on.contains(i)) i];
+    final order = [
+      for (final i in _items)
+        if (_on.contains(i)) i,
+    ];
     if (order.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Check at least one protocol for Auto.')),

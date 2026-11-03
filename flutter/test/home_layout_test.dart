@@ -58,10 +58,10 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Home: the connect switch, quick settings and the status banner; nothing technical.
+      // Home: the connect button and quick settings; nothing technical, no status banner.
       expect(find.bySemanticsLabel('Connect'), findsOneWidget);
       expect(find.text('Auto - fastest route'), findsOneWidget);
-      expect(find.text('You are not protected'), findsOneWidget);
+      expect(find.text('You are not protected'), findsNothing);
       expect(find.byType(DropdownMenu<int>), findsNothing);
       expect(find.text('Waiting for logs...'), findsNothing);
       expect(tester.takeException(), isNull);

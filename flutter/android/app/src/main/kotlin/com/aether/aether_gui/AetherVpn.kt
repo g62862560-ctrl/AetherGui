@@ -9,7 +9,7 @@ import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import java.io.File
 
-// Full-device VPN: every app's IPv4 traffic enters the tun, hev-socks5-tunnel (tun2socks, built from
+// Full-device VPN: every app's IPv4 and IPv6 traffic enters the tun, hev-socks5-tunnel (tun2socks, built from
 // src/main/jni) turns it into connections on aether's SOCKS5 port. DNS is answered inside the tun by
 // hev's mapdns (fake IPs, the domain name goes to SOCKS), so it works even without SOCKS UDP support.
 // ponytail: IPv4 only (aether runs with -4); IPv6 is left outside the tun, route ::/0 too if it leaks.
@@ -42,6 +42,9 @@ class AetherVpn : VpnService() {
             .setMtu(MTU)
             .addAddress("198.18.0.1", 32)
             .addRoute("0.0.0.0", 0)
+            // IPv6 must enter the tun too, or it bypasses the VPN on IPv6 networks.
+            .addAddress("fc00::1", 128)
+            .addRoute("::", 0)
             .addDnsServer(DNS)
             .addDisallowedApplication(packageName) // aether itself must reach the internet directly
             .establish() ?: return START_NOT_STICKY // consent revoked meanwhile
@@ -52,6 +55,7 @@ class AetherVpn : VpnService() {
             tunnel:
               mtu: $MTU
               ipv4: 198.18.0.1
+              ipv6: 'fc00::1'
             socks5:
               address: 127.0.0.1
               port: $port

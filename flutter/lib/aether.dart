@@ -52,7 +52,29 @@ class AetherProcess {
 
 // Everything about the aether binary itself: where it lives, starting it, and testing its tunnel.
 class Aether {
-  static const testUrl = 'http://www.gstatic.com/generate_204';
+  static const defaultTestUrl = 'http://www.gstatic.com/generate_204';
+  // Offered in Settings; the user may also type any http(s) URL.
+  static const testUrlSuggestions = [
+    defaultTestUrl,
+    'http://cp.cloudflare.com/generate_204',
+    'https://www.google.com/generate_204',
+    'https://www.cloudflare.com/cdn-cgi/trace',
+    'http://www.msftconnecttest.com/connecttest.txt',
+  ];
+  static var testUrl = defaultTestUrl;
+
+  // Why a typed delay-test URL can't be used, or null if it can.
+  static String? testUrlError(String text) {
+    final u = Uri.tryParse(text.trim());
+    return u != null &&
+            (u.scheme == 'http' || u.scheme == 'https') &&
+            u.host.isNotEmpty
+        ? null
+        : 'Enter a full http:// or https:// URL';
+  }
+
+  // Ping color thresholds: below good is green, below slow is amber, else red.
+  static const goodPingMs = 300, slowPingMs = 800;
   static const connectTimeoutMs =
       10000; // after the proxy is up, the internet test must pass within this
   static const defaultHttpPort = 1819, defaultSocksPort = 1818;
@@ -192,7 +214,8 @@ class Aether {
   // (preset index -> ms to connect, -1 = failed last time): fastest first, then never tried, then failed;
   // ties shuffled (List.sort is not stable, so ties use the shuffle position).
   static List<Preset> autoOrder(Map<int, int> connectMs, [List<int>? saved]) {
-    if (saved != null && saved.isNotEmpty) return [for (final i in saved) presets[i]];
+    if (saved != null && saved.isNotEmpty)
+      return [for (final i in saved) presets[i]];
     int key(int i) => _speedKey(connectMs, i);
     final shuffled = [
       for (final (i, p) in presets.indexed)
@@ -208,9 +231,16 @@ class Aether {
 
   // After a connect attempt only the tested preset moves: before the first one that was slower (to the end if it failed).
   // Everything else keeps its place, so the user's own moves survive.
-  static List<int> rerank(List<int> order, Map<int, int> connectMs, int tested) {
+  static List<int> rerank(
+    List<int> order,
+    Map<int, int> connectMs,
+    int tested,
+  ) {
     if (!order.contains(tested)) return order;
-    final rest = [for (final i in order) if (i != tested) i];
+    final rest = [
+      for (final i in order)
+        if (i != tested) i,
+    ];
     final key = _speedKey(connectMs, tested);
     final at = rest.indexWhere((i) => _speedKey(connectMs, i) > key);
     return rest..insert(at < 0 ? rest.length : at, tested);
@@ -349,7 +379,7 @@ class Aether {
         environment: {
           'HOME': dir,
           'AETHER_SCAN': scan,
-          'AETHER_IP': '4',
+          'AETHER_IP': 'v4', // the core accepts v4, v6 or both
           'AETHER_QUICK_RECONNECT': '1',
           ...options.environment,
         },
@@ -423,9 +453,8 @@ class Aether {
       req.persistentConnection = false;
       final res = await req.close();
       await res.drain<void>();
-      return res.statusCode == HttpStatus.noContent
-          ? sw.elapsedMilliseconds
-          : null;
+      // Any success counts, since user URLs may answer 200 rather than 204.
+      return res.statusCode < 400 ? sw.elapsedMilliseconds : null;
     }
 
     int? ms;
