@@ -5,6 +5,14 @@ import 'package:aether_gui/auto_order_page.dart';
 void main() {
   int index(String name) => Aether.presets.indexWhere((p) => p.name == name);
 
+  test('WireGuard is first in the fresh default Auto order', () {
+    for (var run = 0; run < 20; run++) {
+      expect(Aether.autoOrder({}).first.name, 'WireGuard');
+    }
+    final failed = {index('WireGuard'): -1};
+    expect(Aether.autoOrder(failed).first.name, isNot('WireGuard'));
+  });
+
   test('Auto tries the fastest past connect first and failed ones last', () {
     final past = {
       index('WireGuard'): 9000,

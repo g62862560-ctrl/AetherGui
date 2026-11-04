@@ -47,6 +47,10 @@ static class Checks
         Check(Aether.CreateStartInfo(Aether.Presets[0], new CoreOptions()).Environment["AETHER_SCAN"] == "turbo", "Fast scan is the default");
         {
             int Index(string name) => Array.FindIndex(Aether.Presets, p => p.Name == name);
+            Check(Enumerable.Range(0, 20).All(_ => Aether.AutoOrder(new Dictionary<int, int>())[0].Name == "WireGuard"),
+                "WireGuard is first in the fresh default Auto order");
+            Check(Aether.AutoOrder(new Dictionary<int, int> { [Index("WireGuard")] = -1 })[0].Name != "WireGuard",
+                "Failed WireGuard does not keep default priority");
             var past = new Dictionary<int, int> { [Index("WireGuard")] = 9000, [Index("MASQUE")] = 3000, [Index("MASQUE-in-MASQUE")] = -1 };
             var order = Aether.AutoOrder(past).Select(p => p.Name).ToList();
             Check(order[0] == "MASQUE" && order[1] == "WireGuard" && order[^1] == "MASQUE-in-MASQUE"

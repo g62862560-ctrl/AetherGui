@@ -211,8 +211,8 @@ class Aether {
       };
 
   // A saved order (kept current by rerank, editable by the user) is used as is. Otherwise from past connects
-  // (preset index -> ms to connect, -1 = failed last time): fastest first, then never tried, then failed;
-  // ties shuffled (List.sort is not stable, so ties use the shuffle position).
+  // (preset index -> ms to connect, -1 = failed last time): fastest first, then never tried (WireGuard first),
+  // then failed; other ties shuffled (List.sort is not stable, so ties use the shuffle position).
   static List<Preset> autoOrder(Map<int, int> connectMs, [List<int>? saved]) {
     if (saved != null && saved.isNotEmpty)
       return [for (final i in saved) presets[i]];
@@ -224,7 +224,13 @@ class Aether {
     final rank = {for (final (pos, i) in shuffled.indexed) i: pos};
     shuffled.sort((a, b) {
       final c = key(a).compareTo(key(b));
-      return c != 0 ? c : rank[a]!.compareTo(rank[b]!);
+      if (c != 0) return c;
+      final aDefault =
+          presets[a].name == 'WireGuard' && !connectMs.containsKey(a);
+      final bDefault =
+          presets[b].name == 'WireGuard' && !connectMs.containsKey(b);
+      if (aDefault != bDefault) return aDefault ? -1 : 1;
+      return rank[a]!.compareTo(rank[b]!);
     });
     return [for (final i in shuffled) presets[i]];
   }

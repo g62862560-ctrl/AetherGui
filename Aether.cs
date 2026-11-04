@@ -139,12 +139,13 @@ static class Aether
         .Select(s => int.TryParse(s, out var i) ? i : -1).Where(i => i >= 0 && i < Presets.Length).Distinct().ToArray();
 
     // A saved order is used as is. Otherwise from past connects (preset index -> ms to connect, -1 = failed last time):
-    // fastest first, then never tried, then failed; ties shuffled (OrderBy is stable).
+    // fastest first, then never tried (WireGuard first), then failed; other ties shuffled (OrderBy is stable).
     public static List<Preset> AutoOrder(IReadOnlyDictionary<int, int> connectMs, int[]? saved = null) => saved is { Length: > 0 }
         ? saved.Select(i => Presets[i]).ToList()
         : AutoPresets
         .OrderBy(_ => Random.Shared.Next())
         .OrderBy(p => SpeedKey(connectMs, Array.IndexOf(Presets, p)))
+        .ThenBy(p => p.Name == "WireGuard" && !connectMs.ContainsKey(Array.IndexOf(Presets, p)) ? 0 : 1)
         .ToList();
 
     private static int SpeedKey(IReadOnlyDictionary<int, int> connectMs, int i) =>
