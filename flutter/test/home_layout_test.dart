@@ -35,6 +35,34 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('protocol can be selected on Home and is saved', (tester) async {
+    final dir = Directory.systemTemp.createTempSync('aether-protocol-');
+    Aether.dir = dir.path;
+    Aether.exe = '${dir.path}/missing-core';
+    addTearDown(() => dir.deleteSync(recursive: true));
+    await tester.pumpWidget(
+      MaterialApp(theme: Palette.theme, home: const HomePage()),
+    );
+    await tester.pumpAndSettle();
+
+    final wireGuard = Aether.presets.indexWhere((p) => p.name == 'WireGuard');
+    await tester.tap(find.byKey(const Key('connectionProtocol')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('WireGuard').last);
+    await tester.pumpAndSettle();
+
+    final menu = tester.widget<DropdownMenu<int>>(
+      find.byKey(const Key('connectionProtocol')),
+    );
+    expect(menu.initialSelection, wireGuard);
+    expect(
+      File('${dir.path}/settings.txt').readAsStringSync(),
+      contains('Preset=$wireGuard'),
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   for (final size in [
     const Size(320, 568),
     const Size(844, 390),
@@ -58,20 +86,16 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Home: the connect button and quick settings; nothing technical, no status banner.
+      // Home: connect, the full protocol list in stable order, and quick settings.
       expect(find.bySemanticsLabel('Connect'), findsOneWidget);
       expect(find.text('Auto - fastest route'), findsOneWidget);
       expect(find.text('You are not protected'), findsNothing);
-      expect(find.byType(DropdownMenu<int>), findsNothing);
+      expect(find.byKey(const Key('connectionProtocol')), findsOneWidget);
       expect(find.text('Waiting for logs...'), findsNothing);
-      expect(tester.takeException(), isNull);
-
-      // Settings: protocol list in stable order, the log, and core settings.
-      await tester.tap(find.byTooltip('Settings'));
-      await tester.pumpAndSettle();
       final menu = tester.widget<DropdownMenu<int>>(
-        find.byType(DropdownMenu<int>),
+        find.byKey(const Key('connectionProtocol')),
       );
+      expect(menu.enabled, isTrue);
       final entries = menu.dropdownMenuEntries;
       expect(entries.first.value, -1);
       final expectedIndexes = [
@@ -83,6 +107,13 @@ void main() {
       for (final entry in entries.skip(1)) {
         expect(entry.label, Aether.presets[entry.value].label);
       }
+      expect(tester.takeException(), isNull);
+
+      // Settings keeps Auto order, the log, and core settings; Protocol stays on Home.
+      await tester.tap(find.byTooltip('Settings'));
+      await tester.pumpAndSettle();
+      expect(find.byType(DropdownMenu<int>), findsNothing);
+      expect(find.text('Auto order'), findsOneWidget);
       await tester.scrollUntilVisible(
         find.text('Waiting for logs...'),
         200,

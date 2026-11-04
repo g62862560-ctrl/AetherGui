@@ -686,7 +686,7 @@ class _HomePageState extends State<HomePage> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            _routeLine(busy),
+                            _routeLine(),
                             if (_statusColor == seaGreen && _delay.isNotEmpty)
                               Text.rich(
                                 TextSpan(
@@ -710,6 +710,8 @@ class _HomePageState extends State<HomePage> {
                       ),
                     ],
                   ),
+                  const SizedBox(height: 12),
+                  _protocolMenu(busy),
                   const SizedBox(height: 12),
                   if (_error != null) ...[
                     _errorCard(_error!, busy),
@@ -785,8 +787,8 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // Which route is used: the one running now, else the saved choice. Change opens Settings.
-  Widget _routeLine(bool busy) {
+  // Which route is used: the one running now, else the saved choice.
+  Widget _routeLine() {
     final route =
         _route ??
         (_preset < 0 ? 'Auto - fastest route' : Aether.presets[_preset].name);
@@ -795,13 +797,37 @@ class _HomePageState extends State<HomePage> {
         const Icon(Icons.bolt_rounded, size: 20, color: Palette.accent),
         const SizedBox(width: 8),
         Flexible(child: Text(route, overflow: TextOverflow.ellipsis)),
-        TextButton(
-          onPressed: busy ? null : _openSettings,
-          child: const Text('Change'),
-        ),
       ],
     );
   }
+
+  // The main connection choice stays on Home; Auto's detailed order remains in Settings.
+  Widget _protocolMenu(bool busy) => DropdownMenu<int>(
+    key: const Key('connectionProtocol'),
+    label: const Text('Protocol'),
+    leadingIcon: const Icon(Icons.vpn_lock_outlined),
+    expandedInsets: EdgeInsets.zero,
+    enabled: !busy, // pick before connecting; Disconnect to change
+    initialSelection: _preset,
+    dropdownMenuEntries: [
+      const DropdownMenuEntry(value: -1, label: 'Auto (order in Settings)'),
+      // Keep persisted values stable while displaying fast presets first.
+      for (final manualOnly in [false, true])
+        for (final (i, p) in Aether.presets.indexed)
+          if (p.manualOnly == manualOnly)
+            DropdownMenuEntry(
+              value: i,
+              label: p.label,
+              leadingIcon: p.name.contains('Psiphon')
+                  ? Image.asset('assets/psiphon.png', width: 20)
+                  : const SizedBox(width: 20), // keeps names lined up
+            ),
+    ],
+    onSelected: (v) {
+      setState(() => _preset = v ?? -1);
+      _saveSettings();
+    },
+  );
 
   // Proxy mode: nothing is routed for the user, so show where to point apps, ready to copy.
   Widget _proxyCard() {
@@ -1078,31 +1104,6 @@ class _HomePageState extends State<HomePage> {
         padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
         children: [
           section('Connection'),
-          DropdownMenu<int>(
-            label: const Text('Protocol'),
-            leadingIcon: const Icon(Icons.vpn_lock_outlined),
-            expandedInsets: EdgeInsets.zero,
-            enabled: !busy, // pick before connecting; Disconnect to change
-            initialSelection: _preset,
-            dropdownMenuEntries: [
-              const DropdownMenuEntry(value: -1, label: 'Auto (order below)'),
-              // Keep persisted values stable while displaying fast presets first.
-              for (final manualOnly in [false, true])
-                for (final (i, p) in Aether.presets.indexed)
-                  if (p.manualOnly == manualOnly)
-                    DropdownMenuEntry(
-                      value: i,
-                      label: p.label,
-                      leadingIcon: p.name.contains('Psiphon')
-                          ? Image.asset('assets/psiphon.png', width: 20)
-                          : const SizedBox(width: 20), // keeps names lined up
-                    ),
-            ],
-            onSelected: (v) {
-              setState(() => _preset = v ?? -1);
-              _saveSettings();
-            },
-          ),
           ListTile(
             leading: const Icon(Icons.low_priority_rounded),
             title: const Text('Auto order'),
