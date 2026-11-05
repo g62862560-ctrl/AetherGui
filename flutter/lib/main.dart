@@ -71,10 +71,12 @@ class _HomePageState extends State<HomePage> {
       seaGreen = Palette.connected;
 
   AetherProcess? _process;
-  Cancel? _ct;
+  Cancel? _ct, _attempt;
+  bool _nextRequested = false;
   bool _autoConnect = false;
   CoreOptions _coreOptions = const CoreOptions();
   int _preset = -1; // index into Aether.presets, -1 = Auto (rotate through all)
+  int _trySeconds = Aether.fastSecs;
   String _scan = 'turbo'; // AETHER_SCAN: turbo or balanced
   bool _vpn = true; // full-device VPN (tun); false = only serve the local proxy
   bool _showActivity = true;
@@ -94,7 +96,8 @@ class _HomePageState extends State<HomePage> {
   final _scroll = ScrollController();
   final _httpPortText = TextEditingController(),
       _socksPortText = TextEditingController(),
-      _testUrlText = TextEditingController();
+      _testUrlText = TextEditingController(),
+      _trySecondsText = TextEditingController();
   // preset index -> ms its last connect took, -1 = failed; orders Auto
   var _connectMs = <int, int>{};
   // Auto's order as preset indexes, kept current after each connect and editable; empty = speed ranking
@@ -114,6 +117,11 @@ class _HomePageState extends State<HomePage> {
           ) ??
           -1;
       _preset = i >= -1 && i < Aether.presets.length ? i : -1;
+      final seconds = int.tryParse(
+        RegExp(r'TrySeconds=(\d+)').firstMatch(s)?.group(1) ?? '',
+      );
+      if (seconds != null && seconds >= 5 && seconds <= 3600)
+        _trySeconds = seconds;
       if (s.contains('Scan=balanced')) _scan = 'balanced';
       _vpn = !s.contains('Mode=proxy');
       _showActivity = !s.contains('ShowActivity=0');
@@ -146,6 +154,7 @@ class _HomePageState extends State<HomePage> {
     _httpPortText.text = '${Aether.httpPort}';
     _socksPortText.text = '${Aether.socksPort}';
     _testUrlText.text = Aether.testUrl;
+    _trySecondsText.text = '$_trySeconds';
     _checkUpdates(interactive: false);
     if (_autoConnect) {
       _log('Auto-connecting in ${startupDelayMs ~/ 1000}s...');
@@ -163,6 +172,7 @@ class _HomePageState extends State<HomePage> {
     _httpPortText.dispose();
     _socksPortText.dispose();
     _testUrlText.dispose();
+    _trySecondsText.dispose();
     _changes.dispose();
     super.dispose();
   }
@@ -186,7 +196,8 @@ class _HomePageState extends State<HomePage> {
     'HttpPort=${Aether.httpPort}\nSocksPort=${Aether.socksPort}\n'
     'TestUrl=${Aether.testUrl}\n'
     'ConnectMs=${Aether.formatConnectMs(_connectMs)}\n'
-    'AutoOrder=${_order.join(',')}\n',
+    'AutoOrder=${_order.join(',')}\n'
+    'TrySeconds=$_trySeconds\n',
   );
 
   List<int> _autoIndexes([List<int>? saved]) => [
@@ -194,10 +205,17 @@ class _HomePageState extends State<HomePage> {
       Aether.presets.indexOf(p),
   ];
 
-  // Auto: try the fast presets, fastest past connect first; one that times out or drops is not retried until all others were tried.
-  // A chosen preset (including the slow manual-only ones) is simply retried.
+  void _nextProtocol() {
+    if (_ct == null) return;
+    _nextRequested = true;
+    _attempt?.cancel();
+  }
+
+  // Auto: try the default presets, fastest past connect first; one that times out or drops is not retried until all others were tried.
+  // A chosen preset is retried unless Next protocol is pressed.
   Future<void> _run(Cancel ct) async {
     final untried = <Preset>[];
+    var chosen = _preset;
     try {
       if (!File(Aether.exe).existsSync())
         return _logError(
@@ -208,13 +226,34 @@ class _HomePageState extends State<HomePage> {
       while (true) {
         if (untried.isEmpty) {
           untried.addAll(
-            _preset < 0
+            chosen < 0
                 ? Aether.autoOrder(_connectMs, _order)
-                : [Aether.presets[_preset]],
+                : [Aether.presets[chosen]],
           );
         }
-        await _connectAndMonitor(untried.removeAt(0), ct);
-        await ct.delay(1000);
+        final p = untried.removeAt(0);
+        final attempt = _attempt = Cancel(ct);
+        try {
+          if (_nextRequested) attempt.cancel();
+          await _connectAndMonitor(
+            p,
+            chosen < 0 ? _trySeconds : p.startupSecs,
+            attempt,
+          );
+          await attempt.delay(1000);
+        } on Cancelled {
+          if (ct.isCancelled) rethrow;
+          _killProcess();
+          if (chosen >= 0)
+            chosen = Aether.nextPresetIndex(Aether.presets.indexOf(p));
+          _step(
+            'Next protocol: ${chosen < 0 ? 'Auto order' : Aether.presets[chosen].name}.',
+            orange,
+          );
+        } finally {
+          _attempt = null;
+          _nextRequested = false;
+        }
       }
     } on Cancelled {
       // user pressed Disconnect, or a port conflict stopped the rotation
@@ -223,6 +262,8 @@ class _HomePageState extends State<HomePage> {
       _logError('Connection failed: $e');
       _addStep('Connection failed.', red);
     } finally {
+      _attempt = null;
+      _nextRequested = false;
       Aether.vpnStop();
       _killProcess();
       _setStatus('Disconnected', red);
@@ -232,7 +273,12 @@ class _HomePageState extends State<HomePage> {
   }
 
   // Returns when the preset fails to connect within the timeout, or after a connected session drops.
-  Future<void> _connectAndMonitor(Preset p, Cancel ct) async {
+  Future<void> _connectAndMonitor(
+    Preset p,
+    int startupSeconds,
+    Cancel ct,
+  ) async {
+    ct.check();
     _step('Trying ${p.name}...');
     _route = p.name;
     _setStatus('Connecting: ${p.name}', orange);
@@ -247,7 +293,7 @@ class _HomePageState extends State<HomePage> {
       if (port != null &&
           (port == Aether.socksPort || port == Aether.httpPort)) {
         portConflict = true;
-        _portInUse(port, ct);
+        _portInUse(port, _ct!);
       } else if (mounted) {
         setState(() => _error = '${p.name}: $error');
         _addStep('${p.name}: core reported an error.', red);
@@ -255,6 +301,7 @@ class _HomePageState extends State<HomePage> {
     }
 
     final proc = _process = await Aether.start(p, coreLog, _coreOptions, _scan);
+    ct.check();
     if (proc == null) {
       if (mounted) {
         setState(
@@ -270,7 +317,7 @@ class _HomePageState extends State<HomePage> {
     final took = Stopwatch()..start();
     int? ms = await Aether.waitConnected(
       proc,
-      _coreOptions.isConfigured ? _coreOptions.startupSeconds : p.startupSecs,
+      _coreOptions.isConfigured ? _coreOptions.startupSeconds : startupSeconds,
       ct,
       _step,
     );
@@ -570,7 +617,7 @@ class _HomePageState extends State<HomePage> {
       tip,
     );
     _log(
-      '3. Auto rotates the fast protocols (30s each), or your own order from Settings > Auto order. Tor/Psiphon help on strict networks.',
+      '3. Auto rotates the default protocols ($_trySeconds s each), or your own order from Settings > Auto order. Psiphon may need a longer try time.',
       tip,
     );
   }
@@ -712,6 +759,45 @@ class _HomePageState extends State<HomePage> {
                   ),
                   const SizedBox(height: 12),
                   _protocolMenu(busy),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: busy ? _nextProtocol : null,
+                        icon: const Icon(Icons.skip_next_rounded),
+                        label: const Text('Next protocol'),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextField(
+                          key: const Key('autoTrySeconds'),
+                          controller: _trySecondsText,
+                          enabled: !busy,
+                          keyboardType: TextInputType.number,
+                          decoration: InputDecoration(
+                            labelText: 'Auto try (seconds)',
+                            errorText:
+                                (int.tryParse(_trySecondsText.text) ?? 0) >=
+                                        5 &&
+                                    (int.tryParse(_trySecondsText.text) ?? 0) <=
+                                        3600
+                                ? null
+                                : '5–3600',
+                          ),
+                          onChanged: (value) {
+                            final seconds = int.tryParse(value);
+                            if (seconds != null &&
+                                seconds >= 5 &&
+                                seconds <= 3600) {
+                              _trySeconds = seconds;
+                              _saveSettings();
+                            }
+                            setState(() {});
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 12),
                   if (_error != null) ...[
                     _errorCard(_error!, busy),
@@ -811,17 +897,15 @@ class _HomePageState extends State<HomePage> {
     initialSelection: _preset,
     dropdownMenuEntries: [
       const DropdownMenuEntry(value: -1, label: 'Auto (order in Settings)'),
-      // Keep persisted values stable while displaying fast presets first.
-      for (final manualOnly in [false, true])
-        for (final (i, p) in Aether.presets.indexed)
-          if (p.manualOnly == manualOnly)
-            DropdownMenuEntry(
-              value: i,
-              label: p.label,
-              leadingIcon: p.name.contains('Psiphon')
-                  ? Image.asset('assets/psiphon.png', width: 20)
-                  : const SizedBox(width: 20), // keeps names lined up
-            ),
+      // Keep persisted values stable while displaying Auto presets first.
+      for (final i in Aether.menuPresetIndexes)
+        DropdownMenuEntry(
+          value: i,
+          label: Aether.presets[i].label,
+          leadingIcon: Aether.presets[i].name.contains('Psiphon')
+              ? Image.asset('assets/psiphon.png', width: 20)
+              : const SizedBox(width: 20), // keeps names lined up
+        ),
     ],
     onSelected: (v) {
       setState(() => _preset = v ?? -1);

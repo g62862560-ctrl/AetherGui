@@ -7,9 +7,9 @@ using System.Text;
 
 namespace AetherGui;
 
-record Preset(string Name, string Args, int StartupSecs = Aether.FastSecs, string HttpFlag = "--http-proxy")
+record Preset(string Name, string Args, int StartupSecs = Aether.FastSecs, string HttpFlag = "--http-proxy", bool AutoByDefault = false)
 {
-    public bool ManualOnly => StartupSecs > Aether.FastSecs; // too slow to wait for in the Auto rotation
+    public bool ManualOnly => StartupSecs > Aether.FastSecs && !AutoByDefault;
     public string Label => ManualOnly ? Name + " (manual)" : Name;
 }
 
@@ -79,10 +79,10 @@ static class Aether
     private static readonly string Exe = Path.Combine(Dir, "aether.exe");
 
     private const string Warp = " --turbo -4 --quick-reconnect";
-    public const int FastSecs = 30; // startup budget of the fast protocols, the only ones Auto rotates through
+    public const int FastSecs = 30; // default Auto attempt budget; slow Psiphon routes can also be included
 
     // The protocol menu aether itself offers. Tor/Psiphon bootstrap slowly (tor tries 75s plainly, then bridges;
-    // psiphon waits up to 180s), so they get longer startup budgets and run only when picked by hand.
+    // psiphon waits up to 180s), so they get longer startup budgets. Four Psiphon routes are in Auto by request.
     // The "alone" modes don't serve --http-proxy, so they expose their own HTTP proxy flag on the same port.
     public static readonly Preset[] Presets =
     {
@@ -104,10 +104,10 @@ static class Aether
         new("WARP-in-WARP → Tor", "--gool-classic --tor" + Warp, 300, "--tor-http"),
         new("MASQUE-in-MASQUE → Tor", "--mim --tor" + Warp, 300, "--tor-http"),
         new("MASQUE → Psiphon", "--masque --psiphon" + Warp, 240, "--psiphon-http"),
-        new("MASQUE HTTP/2 → Psiphon", "--masque --h2 --psiphon" + Warp, 240, "--psiphon-http"),
-        new("WireGuard → Psiphon", "--wg --psiphon" + Warp, 240, "--psiphon-http"),
-        new("WARP-in-WARP → Psiphon", "--gool-classic --psiphon" + Warp, 240, "--psiphon-http"),
-        new("MASQUE-in-MASQUE → Psiphon", "--mim --psiphon" + Warp, 240, "--psiphon-http"),
+        new("MASQUE HTTP/2 → Psiphon", "--masque --h2 --psiphon" + Warp, 240, "--psiphon-http", true),
+        new("WireGuard → Psiphon", "--wg --psiphon" + Warp, 240, "--psiphon-http", true),
+        new("WARP-in-WARP → Psiphon", "--gool-classic --psiphon" + Warp, 240, "--psiphon-http", true),
+        new("MASQUE-in-MASQUE → Psiphon", "--mim --psiphon" + Warp, 240, "--psiphon-http", true),
         new("WireGuard-in-MASQUE (gool)", "--gool" + Warp),
         new("WireGuard-in-MASQUE HTTP/2", "--gool --h2" + Warp),
     };
@@ -115,6 +115,12 @@ static class Aether
     // Display order is separate from persisted preset indexes.
     public static readonly int[] MenuPresetIndexes = Enumerable.Range(0, Presets.Length)
         .OrderBy(i => Presets[i].ManualOnly).ToArray();
+
+    public static int NextPresetIndex(int current)
+    {
+        var position = Array.IndexOf(MenuPresetIndexes, current);
+        return MenuPresetIndexes[(position + 1) % MenuPresetIndexes.Length];
+    }
 
     public static readonly Preset[] AutoPresets = Presets.Where(p => !p.ManualOnly).ToArray();
 

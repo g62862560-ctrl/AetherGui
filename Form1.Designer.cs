@@ -16,6 +16,8 @@ static class Palette
 partial class Form1
 {
     private Button btnConnect = null!;
+    private Button btnNextProtocol = null!;
+    private NumericUpDown numTrySeconds = null!;
     private ToolStripMenuItem btnInfo = null!;
     private ToolStripMenuItem btnCoreSettings = null!;
     private ToolStripMenuItem btnCoreInput = null!;
@@ -64,8 +66,18 @@ partial class Form1
         btnConnect.AutoSize = false;
         btnConnect.Dock = DockStyle.Top;
         btnConnect.Height = 30;
-                btnConnect.Margin = new Padding(0, 6, 0, 6);
+        btnConnect.Margin = new Padding(0, 6, 0, 6);
         btnConnect.Click += btnConnect_Click;
+        btnNextProtocol = ClassicButton("Next protocol");
+        btnNextProtocol.Enabled = false;
+        btnNextProtocol.AccessibleDescription = "Stop the current protocol attempt and try the next one";
+        btnNextProtocol.Click += btnNextProtocol_Click;
+        numTrySeconds = new NumericUpDown
+        {
+            Minimum = 5, Maximum = 3600, Width = 60, Margin = new Padding(0, 0, 0, 6),
+            AccessibleName = "Auto protocol try seconds",
+            AccessibleDescription = "Seconds Auto waits for each protocol before trying the next one"
+        };
 
         // Rarely used actions and options live in a classic menu bar so the window shows only what connecting needs.
         btnInfo = new ToolStripMenuItem("&Proxy info") { AccessibleDescription = "Write proxy ports and security recommendations to the activity log" };
@@ -109,20 +121,26 @@ partial class Form1
         var status = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = true, Margin = Padding.Empty };
         status.Controls.Add(lblStatus);
 
-        var controlLayout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 9, Margin = Padding.Empty };
+        var tryRow = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = true, Margin = Padding.Empty };
+        tryRow.Controls.Add(btnNextProtocol);
+        tryRow.Controls.Add(new Label { Text = "Auto try (seconds)", AutoSize = true, Margin = new Padding(0, 5, 4, 0) });
+        tryRow.Controls.Add(numTrySeconds);
+
+        var controlLayout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 10, Margin = Padding.Empty };
         controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); // fit the panel, never the content
-        for (var i = 0; i < 9; i++) controlLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        for (var i = 0; i < 10; i++) controlLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         // Connect sits right under the status so it stays in view; the rest scrolls if large text needs more room.
         controlLayout.Controls.Add(status, 0, 0);
         controlLayout.Controls.Add(prgConnecting, 0, 1);
         controlLayout.Controls.Add(btnConnect, 0, 2);
-        controlLayout.Controls.Add(lblProtocol, 0, 3);
-        controlLayout.Controls.Add(cboProtocol, 0, 4);
-        controlLayout.Controls.Add(lblScan, 0, 5);
-        controlLayout.Controls.Add(cboScan, 0, 6);
-        controlLayout.Controls.Add(chkSysProxy, 0, 7);
+        controlLayout.Controls.Add(tryRow, 0, 3);
+        controlLayout.Controls.Add(lblProtocol, 0, 4);
+        controlLayout.Controls.Add(cboProtocol, 0, 5);
+        controlLayout.Controls.Add(lblScan, 0, 6);
+        controlLayout.Controls.Add(cboScan, 0, 7);
+        controlLayout.Controls.Add(chkSysProxy, 0, 8);
         chkShowLog = new CheckBox { Text = "Show latest activity", AutoSize = true, Margin = new Padding(0, 4, 0, 2) };
-        controlLayout.Controls.Add(chkShowLog, 0, 8);
+        controlLayout.Controls.Add(chkShowLog, 0, 9);
 
         // Small sunken log of the latest lines that fills the space left under the controls.
         txtMiniLog = new RichTextBox
@@ -146,10 +164,10 @@ partial class Form1
         Text = "Aether — Private network client";
         AutoScaleMode = AutoScaleMode.Dpi;
         BackColor = Palette.Background;
-        Size = new Size(333, 365);
+        Size = new Size(333, 400);
         FormBorderStyle = FormBorderStyle.FixedSingle; // size is locked; only Show latest activity changes the height
         MaximizeBox = false;
-        MinimumSize = new Size(320, 290); // sized for the hidden log; ShowLog grows it
+        MinimumSize = new Size(320, 325); // sized for the hidden log; ShowLog grows it
         StartPosition = FormStartPosition.CenterScreen;
         KeyPreview = true;
         // Docked controls lay out last-added first: the menu takes the top, then the shell fills the rest.

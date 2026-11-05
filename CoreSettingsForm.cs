@@ -122,7 +122,7 @@ sealed class CoreSettingsForm : Form
         return layout;
     }
 
-    // saved null or empty = the speed ranking of the fast protocols.
+    // saved null or empty = the speed ranking of the default Auto protocols.
     private void FillOrder(int[]? saved)
     {
         var first = Aether.AutoOrder(_connectMs, saved).Select(p => Array.IndexOf(Aether.Presets, p)).ToArray();

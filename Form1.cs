@@ -11,6 +11,8 @@ public partial class Form1 : Form
 
     private Process? _process;
     private CancellationTokenSource? _cts;
+    private CancellationTokenSource? _attemptCts;
+    private bool _nextRequested;
     private CoreOptions _coreOptions = new();
     private readonly int[] _protocolIndexes = [-1, .. Aether.MenuPresetIndexes];
     private static readonly string[] ScanModes = ["turbo", "balanced"]; // saved as an index into this
@@ -31,12 +33,15 @@ public partial class Form1 : Form
             var saved = key?.GetValue("Protocol") is int i && i >= 0 && i <= Aether.Presets.Length ? i : 0;
             cboProtocol.SelectedIndex = Array.IndexOf(_protocolIndexes, saved - 1);
             cboScan.SelectedIndex = key?.GetValue("Scan") is 1 ? 1 : 0;
+            numTrySeconds.Value = key?.GetValue("TrySeconds") is int seconds && seconds >= numTrySeconds.Minimum && seconds <= numTrySeconds.Maximum
+                ? seconds : Aether.FastSecs;
             _connectMs = Aether.ParseConnectMs(key?.GetValue("ConnectMs") as string);
         }
         try { _coreOptions = CoreOptions.Load(); }
         catch { chkStartup.Checked = false; Log("Could not load core settings. Review settings before connecting."); }
         cboProtocol.SelectedIndexChanged += (_, _) => SaveSetting("Protocol", _protocolIndexes[cboProtocol.SelectedIndex] + 1);
         cboScan.SelectedIndexChanged += (_, _) => SaveSetting("Scan", cboScan.SelectedIndex);
+        numTrySeconds.ValueChanged += (_, _) => SaveSetting("TrySeconds", (int)numTrySeconds.Value);
         chkStartup.CheckedChanged += (_, _) => SaveSetting("AutoConnect", chkStartup.Checked);
         if (chkShowLog.Checked) ShowLog(true); // starts hidden
         chkShowLog.CheckedChanged += (_, _) =>
@@ -89,7 +94,7 @@ public partial class Form1 : Form
     private void ShowLog(bool show)
     {
         int Px(int v) => IsHandleCreated ? LogicalToDeviceUnits(v) : v; // before the handle, Dpi autoscale scales these later
-        var change = show ? Px(157) : -Px(157); // 365 <-> 522; the log also fills spare room, so never shrink by its height
+        var change = show ? Px(157) : -Px(157); // 400 <-> 557; the log also fills spare room, so never shrink by its height
         txtMiniLog.Visible = show;
         MinimumSize = new Size(MinimumSize.Width, MinimumSize.Height + (show ? Px(50) : -Px(50)));
         Height += change;
@@ -110,25 +115,35 @@ public partial class Form1 : Form
         StartWatchdog();
         btnConnect.Text = "Disconnect";
         btnConnect.AccessibleName = "Disconnect";
-        btnCoreSettings.Enabled = cboProtocol.Enabled = cboScan.Enabled = btnUpdates.Enabled = false;
+        btnCoreSettings.Enabled = cboProtocol.Enabled = cboScan.Enabled = numTrySeconds.Enabled = btnUpdates.Enabled = false;
+        btnNextProtocol.Enabled = true;
         btnCoreInput.Enabled = true;
         await RunAsync(_cts.Token);
         _cts.Dispose();
         _cts = null;
         if (IsDisposed) return;
-        btnCoreSettings.Enabled = cboProtocol.Enabled = cboScan.Enabled = btnUpdates.Enabled = true;
+        btnCoreSettings.Enabled = cboProtocol.Enabled = cboScan.Enabled = numTrySeconds.Enabled = btnUpdates.Enabled = true;
+        btnNextProtocol.Enabled = false;
         btnCoreInput.Enabled = false;
         btnConnect.Text = "Connect securely";
         btnConnect.AccessibleName = "Connect securely";
     }
 
-    // Auto: try the fast presets, fastest past connect first; one that times out or drops is not retried until all others were tried.
-    // A chosen preset (including the slow manual-only ones) is simply retried.
+    private void btnNextProtocol_Click(object? sender, EventArgs e)
+    {
+        if (_cts is null) return;
+        _nextRequested = true;
+        _attemptCts?.Cancel();
+    }
+
+    // Auto: try the default presets, fastest past connect first; one that times out or drops is not retried until all others were tried.
+    // A chosen preset (including the slow manual-only ones) is retried unless Next protocol is pressed.
     private async Task RunAsync(CancellationToken ct)
     {
         var untried = new List<Preset>();
         var chosen = _protocolIndexes[cboProtocol.SelectedIndex]; // -1 = Auto; read once, a new pick applies on the next Connect
         var scan = ScanModes[cboScan.SelectedIndex];
+        var trySeconds = (int)numTrySeconds.Value;
         try
         {
             SetStatus("Downloading aether...", Palette.Connecting);
@@ -140,13 +155,33 @@ public partial class Form1 : Form
                 if (untried.Count == 0) untried.AddRange(chosen < 0 ? Aether.AutoOrder(_connectMs, Aether.SavedOrder) : [Aether.Presets[chosen]]);
                 var p = untried[0];
                 untried.RemoveAt(0);
-                await ConnectAndMonitorAsync(p, scan, ct);
-                await Task.Delay(1000, ct);
+                using var attempt = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                _attemptCts = attempt;
+                try
+                {
+                    if (_nextRequested) attempt.Cancel();
+                    var startupSeconds = _coreOptions.IsConfigured ? _coreOptions.StartupSeconds : chosen < 0 ? trySeconds : p.StartupSecs;
+                    await ConnectAndMonitorAsync(p, scan, startupSeconds, attempt.Token);
+                    await Task.Delay(1000, attempt.Token);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    KillProcess();
+                    if (chosen >= 0) chosen = Aether.NextPresetIndex(Array.IndexOf(Aether.Presets, p));
+                    Log($"Next protocol: {(chosen < 0 ? "Auto order" : Aether.Presets[chosen].Name)}.");
+                }
+                finally
+                {
+                    _attemptCts = null;
+                    _nextRequested = false;
+                }
             }
         }
         catch (OperationCanceledException) { }
         finally
         {
+            _attemptCts = null;
+            _nextRequested = false;
             KillProcess();
             SetStatus("Disconnected", Palette.Disconnected);
             lblDelay.Text = "Delay: -";
@@ -155,16 +190,16 @@ public partial class Form1 : Form
     }
 
     // Returns when the preset fails to connect within the timeout, or after a connected session drops.
-    private async Task ConnectAndMonitorAsync(Preset p, string scan, CancellationToken ct)
+    private async Task ConnectAndMonitorAsync(Preset p, string scan, int startupSeconds, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         Log($"Trying {p.Name}...");
         SetStatus($"Connecting: {p.Name}", Palette.Connecting);
         var proc = _process = Aether.Start(p, Log, _coreOptions, scan);
         if (proc is null) return;
 
         var took = Stopwatch.StartNew();
-        var ms = await Aether.WaitConnectedAsync(proc,
-            _coreOptions.IsConfigured ? _coreOptions.StartupSeconds : p.StartupSecs, ct);
+        var ms = await Aether.WaitConnectedAsync(proc, startupSeconds, ct);
         _connectMs[Array.IndexOf(Aether.Presets, p)] = ms is null ? -1 : (int)took.ElapsedMilliseconds;
         SaveSetting("ConnectMs", Aether.FormatConnectMs(_connectMs));
         var order = Aether.AutoOrder(_connectMs, Aether.SavedOrder).Select(x => Array.IndexOf(Aether.Presets, x)).ToArray();
@@ -333,7 +368,7 @@ public partial class Form1 : Form
         Log("=== Recommendations ===", head);
         Log($"1. {secrets} aether*.toml file(s) beside the exe hold private keys/tokens: keep this folder private, rotate keys if shared.", tip);
         Log("2. Enable 'Set system proxy' only when needed; anything with its own proxy settings can bypass it.", tip);
-        Log("3. Auto rotates the fast protocols (30s each), or your own order from Core settings > Auto order. Tor/Psiphon help on strict networks.", tip);
+        Log($"3. Auto rotates the default protocols ({(int)numTrySeconds.Value}s each), or your own order from Core settings > Auto order. Psiphon may need a longer try time.", tip);
     }
 
     private void SetStatus(string text, Color color)

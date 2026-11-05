@@ -9,16 +9,16 @@ import 'core_options.dart';
 class Preset {
   final String name, args, httpFlag;
   final int startupSecs;
+  final bool autoByDefault;
   const Preset(
     this.name,
     this.args, [
     this.startupSecs = Aether.fastSecs,
     this.httpFlag = '--http-proxy',
+    this.autoByDefault = false,
   ]);
 
-  bool get manualOnly =>
-      startupSecs >
-      Aether.fastSecs; // too slow to wait for in the Auto rotation
+  bool get manualOnly => startupSecs > Aether.fastSecs && !autoByDefault;
   String get label => manualOnly ? '$name (manual)' : name;
 }
 
@@ -29,6 +29,9 @@ class Cancelled implements Exception {}
 // Stand-in for CancellationToken: delays wake up early and throw once cancelled.
 class Cancel {
   final _done = Completer<void>();
+  Cancel([Cancel? parent]) {
+    parent?._done.future.then((_) => cancel());
+  }
   bool get isCancelled => _done.isCompleted;
   void cancel() => isCancelled ? null : _done.complete();
   void check() => isCancelled ? throw Cancelled() : null;
@@ -95,10 +98,10 @@ class Aether {
 
   static const _warp = '--turbo -4 --quick-reconnect';
   static const fastSecs =
-      30; // startup budget of the fast protocols, the only ones Auto rotates through
+      30; // default Auto attempt budget; slow Psiphon routes can also be included
 
   // The protocol menu aether itself offers. Tor/Psiphon bootstrap slowly (tor tries 75s plainly, then bridges;
-  // psiphon waits up to 180s), so they get longer startup budgets and run only when picked by hand.
+  // psiphon waits up to 180s), so they get longer startup budgets. Four Psiphon routes are in Auto by request.
   // The "alone" modes don't serve --http-proxy, so they expose their own HTTP proxy flag on the same port.
   static const presets = <Preset>[
     Preset('MASQUE', '--masque $_warp'),
@@ -148,28 +151,43 @@ class Aether {
       '--masque --h2 --psiphon $_warp',
       240,
       '--psiphon-http',
+      true,
     ),
     Preset(
       'WireGuard → Psiphon',
       '--wg --psiphon $_warp',
       240,
       '--psiphon-http',
+      true,
     ),
     Preset(
       'WARP-in-WARP → Psiphon',
       '--gool-classic --psiphon $_warp',
       240,
       '--psiphon-http',
+      true,
     ),
     Preset(
       'MASQUE-in-MASQUE → Psiphon',
       '--mim --psiphon $_warp',
       240,
       '--psiphon-http',
+      true,
     ),
     Preset('WireGuard-in-MASQUE (gool)', '--gool $_warp'),
     Preset('WireGuard-in-MASQUE HTTP/2', '--gool --h2 $_warp'),
   ];
+
+  static final menuPresetIndexes = [
+    for (final manualOnly in [false, true])
+      for (final (i, p) in presets.indexed)
+        if (p.manualOnly == manualOnly) i,
+  ];
+
+  static int nextPresetIndex(int current) {
+    final position = menuPresetIndexes.indexOf(current);
+    return menuPresetIndexes[(position + 1) % menuPresetIndexes.length];
+  }
 
   static late String
   exe; // libaether.so in nativeLibraryDir, packed by fetch_aether.sh

@@ -109,9 +109,16 @@ static class Checks
             && !new Aether.Updates(null, null, Aether.AppVersion, null).GuiNewer, "Only a newer release counts as an update");
         Check(Aether.Presets[4].Name == "Tor alone" && Aether.Presets[7].Name == "Psiphon + WARP", "Saved indexes stable");
         Check(Aether.AutoPresets.Any(p => p.Args.Contains("--h2")), "Auto HTTP/2 fallback");
+        var requestedPsiphon = new[] { "MASQUE HTTP/2 → Psiphon", "WireGuard → Psiphon", "WARP-in-WARP → Psiphon", "MASQUE-in-MASQUE → Psiphon" };
+        Check(Aether.AutoPresets.Length == 13 && requestedPsiphon.All(name => Aether.AutoPresets.Any(p => p.Name == name))
+            && Aether.AutoPresets.All(p => p.Name != "MASQUE → Psiphon" && p.Name != "Psiphon alone"),
+            "Fresh Auto includes only the four requested Psiphon routes");
         Check(Aether.MenuPresetIndexes.Order().SequenceEqual(Enumerable.Range(0, Aether.Presets.Length)), "Menu includes every stable preset index exactly once");
         Check(Aether.MenuPresetIndexes.Take(Aether.AutoPresets.Length).All(i => !Aether.Presets[i].ManualOnly), "Fast protocols appear first");
         Check(Aether.MenuPresetIndexes.Skip(Aether.AutoPresets.Length).All(i => Aether.Presets[i].ManualOnly), "Manual protocols appear last");
+        Check(Aether.NextPresetIndex(Aether.MenuPresetIndexes[^1]) == Aether.MenuPresetIndexes[0]
+            && Aether.MenuPresetIndexes.Zip(Aether.MenuPresetIndexes.Skip(1)).All(x => Aether.NextPresetIndex(x.First) == x.Second),
+            "Next protocol follows menu order and wraps around");
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var help = Aether.ReadHelpAsync(timeout.Token).GetAwaiter().GetResult();
         Check(help.Contains("--tor") && help.Contains("--psiphon"), "Real bundled core help executes");
@@ -139,6 +146,14 @@ static class Checks
             main.PerformLayout();
             var connect = InForm(All(main).OfType<Button>().First(b => b.Text == "Connect securely"));
             Check(InForm(main.Controls.Find("connectionPanel", true)[0]).Contains(connect), $"Connect button inside its panel at {scale:0.#}x text");
+        }
+        {
+            using var main = new Form1();
+            var next = All(main).OfType<Button>().First(b => b.Text == "Next protocol");
+            var seconds = All(main).OfType<NumericUpDown>().First(n => n.AccessibleName == "Auto protocol try seconds");
+            Check(!next.Enabled && seconds.Minimum == 5 && seconds.Maximum == 3600
+                && seconds.Value >= seconds.Minimum && seconds.Value <= seconds.Maximum,
+                "Next protocol starts disabled and Auto try seconds are editable");
         }
         {
             // After showing then hiding the log, every control fits while connecting, with no scrolling.

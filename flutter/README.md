@@ -23,8 +23,10 @@ The protocol menu includes MASQUE HTTP/3 and HTTP/2, HTTP/2 fragmentation,
 WireGuard, nested WireGuard/MASQUE, standalone Tor/Psiphon, WARP through
 Tor/Psiphon, and Tor/Psiphon through WARP. Forward modes route the Android VPN
 and HTTP latency check through the secondary exit, not the base WARP listener.
-Existing saved protocol indexes are preserved. Auto includes the fast H2 fallbacks;
-Tor/Psiphon remain manual because bootstrap can take minutes.
+Existing saved protocol indexes are preserved. Fresh Auto includes the fast H2
+fallbacks plus MASQUE HTTP/2, WireGuard, WARP-in-WARP and MASQUE-in-MASQUE through
+Psiphon. Tor and the other Psiphon routes remain manual because bootstrap can take
+minutes. Set Auto try seconds high enough for Psiphon when needed.
 
 Open **Core settings** while disconnected to configure additional arguments as a
 JSON string array and `AETHER_*` / `RUST_LOG` environment variables as a JSON

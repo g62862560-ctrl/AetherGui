@@ -63,6 +63,41 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('Auto try seconds are saved only in range', (tester) async {
+    final dir = Directory.systemTemp.createTempSync('aether-try-seconds-');
+    Aether.dir = dir.path;
+    Aether.exe = '${dir.path}/missing-core';
+    addTearDown(() => dir.deleteSync(recursive: true));
+    await tester.pumpWidget(
+      MaterialApp(theme: Palette.theme, home: const HomePage()),
+    );
+    await tester.pumpAndSettle();
+
+    final field = find.byKey(const Key('autoTrySeconds'));
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.widgetWithText(OutlinedButton, 'Next protocol'),
+          )
+          .onPressed,
+      isNull,
+    );
+    await tester.enterText(field, '45');
+    await tester.pump();
+    expect(
+      File('${dir.path}/settings.txt').readAsStringSync(),
+      contains('TrySeconds=45'),
+    );
+    await tester.enterText(field, '2');
+    await tester.pump();
+    expect(
+      File('${dir.path}/settings.txt').readAsStringSync(),
+      contains('TrySeconds=45'),
+    );
+    expect(find.text('5–3600'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   for (final size in [
     const Size(320, 568),
     const Size(844, 390),

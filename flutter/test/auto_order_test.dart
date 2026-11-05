@@ -5,6 +5,36 @@ import 'package:aether_gui/auto_order_page.dart';
 void main() {
   int index(String name) => Aether.presets.indexWhere((p) => p.name == name);
 
+  test('Next protocol follows menu order and wraps around', () {
+    final order = Aether.menuPresetIndexes;
+    for (var i = 0; i < order.length; i++) {
+      expect(Aether.nextPresetIndex(order[i]), order[(i + 1) % order.length]);
+    }
+  });
+
+  test('fresh Auto includes the four requested Psiphon routes', () {
+    final names = Aether.autoOrder({}).map((p) => p.name).toSet();
+    expect(
+      names,
+      containsAll([
+        'MASQUE HTTP/2 → Psiphon',
+        'WireGuard → Psiphon',
+        'WARP-in-WARP → Psiphon',
+        'MASQUE-in-MASQUE → Psiphon',
+      ]),
+    );
+    expect(names.length, 13);
+    expect(names, isNot(contains('MASQUE → Psiphon')));
+    expect(names, isNot(contains('Psiphon alone')));
+  });
+
+  test('cancelling a connection also cancels its current attempt', () async {
+    final connection = Cancel();
+    final attempt = Cancel(connection);
+    connection.cancel();
+    await expectLater(attempt.delay(1000), throwsA(isA<Cancelled>()));
+  });
+
   test('WireGuard is first in the fresh default Auto order', () {
     for (var run = 0; run < 20; run++) {
       expect(Aether.autoOrder({}).first.name, 'WireGuard');
