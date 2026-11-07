@@ -47,14 +47,17 @@ static class Checks
         Check(Aether.CreateStartInfo(Aether.Presets[0], new CoreOptions()).Environment["AETHER_SCAN"] == "turbo", "Fast scan is the default");
         {
             int Index(string name) => Array.FindIndex(Aether.Presets, p => p.Name == name);
-            Check(Enumerable.Range(0, 20).All(_ => Aether.AutoOrder(new Dictionary<int, int>())[0].Name == "WireGuard"),
-                "WireGuard is first in the fresh default Auto order");
+            Check(Enumerable.Range(0, 20).All(_ => Aether.AutoOrder(new Dictionary<int, int>())[0].Name == "MASQUE HTTP/2 → Psiphon"),
+                "Preferred Psiphon routes are first in the fresh default Auto order");
             Check(Aether.AutoOrder(new Dictionary<int, int> { [Index("WireGuard")] = -1 })[0].Name != "WireGuard",
                 "Failed WireGuard does not keep default priority");
             var past = new Dictionary<int, int> { [Index("WireGuard")] = 9000, [Index("MASQUE")] = 3000, [Index("MASQUE-in-MASQUE")] = -1 };
+            var preferred = new[] { "MASQUE HTTP/2 → Psiphon", "MASQUE-in-MASQUE → Psiphon", "WARP-in-WARP → Psiphon" };
             var order = Aether.AutoOrder(past).Select(p => p.Name).ToList();
-            Check(order[0] == "MASQUE" && order[1] == "WireGuard" && order[^1] == "MASQUE-in-MASQUE"
-                && order.Count == Aether.AutoPresets.Length, "Auto tries fastest first, failed last");
+            Check(order.Take(3).SequenceEqual(preferred)
+                && order.IndexOf("MASQUE") < order.IndexOf("WireGuard")
+                && Aether.AutoOrder(new Dictionary<int, int> { [Index("WireGuard")] = -1 }).Last().Name == "WireGuard"
+                && order.Count == Aether.AutoPresets.Length, "Preferred routes first, then fastest, failed non-preferred last");
             var manual = Aether.ParseOrder($"{Index("Tor alone")},x,{Index("MASQUE")},{Index("Tor alone")},999,-1");
             Check(Aether.AutoOrder(past, manual).Select(p => p.Name).SequenceEqual(["Tor alone", "MASQUE"]), "Manual Auto order used as is, junk dropped");
             Check(Aether.AutoOrder(past, []).Count == Aether.AutoPresets.Length, "Empty manual order falls back to ranking");
@@ -90,6 +93,18 @@ static class Checks
             _ = MixedProxy.Start(18190, stop.Token);
             Check(Ask(18190, 5) == "socks" && Ask(18190, (byte)'C') == "http", "Mixed port routes SOCKS5 and HTTP");
             stop.Cancel(); socks.Stop(); http.Stop();
+        }
+        {
+            var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, Aether.SocksPort);
+            listener.Start();
+            try
+            {
+                using var proc = System.Diagnostics.Process.GetCurrentProcess();
+                using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                var result = Aether.WaitConnectedAsync(proc, 1, stop.Token, realDelayTest: false).GetAwaiter().GetResult();
+                Check(result.Connected && result.DelayMs is null, "Disabled real delay test only requires the local proxy");
+            }
+            finally { listener.Stop(); }
         }
         {
             var unsigned = Path.GetTempFileName();
@@ -166,18 +181,6 @@ static class Checks
             var showLog = InForm(All(main).OfType<CheckBox>().First(c => c.Text == "Show latest activity"));
             Check(showLog.Bottom <= InForm(main.Controls.Find("connectionPanel", true)[0]).Bottom - 8, $"All controls fit while connecting ({showLog.Bottom} vs panel {InForm(main.Controls.Find("connectionPanel", true)[0]).Bottom})");
         }
-        {
-            // a b* c d* e  -Up->  b* a d* c e  -Up->  b* d* a c e  -Down x2->  a c b* d* e
-            using var list = new CheckedListBox();
-            foreach (var (s, on) in new[] { ("a", false), ("b", true), ("c", false), ("d", true), ("e", false) }) list.Items.Add(s, on);
-            string Show() => string.Join("", list.Items.Cast<string>().Select((s, i) => list.GetItemChecked(i) ? s + "*" : s));
-            CoreSettingsForm.MoveChecked(list, -1);
-            Check(Show() == "b*ad*ce", "Up moves every checked protocol");
-            CoreSettingsForm.MoveChecked(list, -1);
-            Check(Show() == "b*d*ace", "Checked block stops at the top");
-            CoreSettingsForm.MoveChecked(list, 1); CoreSettingsForm.MoveChecked(list, 1);
-            Check(Show() == "acb*d*e", "Down moves every checked protocol");
-        }
         Check(Form1.LogColor("Could not start the core") == Palette.Disconnected, "Errors are red in the log");
         Check(Form1.LogColor("Switching to WireGuard") == Palette.Connecting, "Route switches are amber in the log");
         Check(Form1.LogColor("Connected: MASQUE") == Palette.Connected, "Connections are green in the log");
@@ -190,6 +193,12 @@ static class Checks
         Check(Aether.ValidTestUrl("https://www.cloudflare.com/cdn-cgi/trace") is null && Aether.ValidTestUrl("ftp://x") is not null
             && Aether.ValidTestUrl("gstatic.com") is not null, "Delay test URL must be absolute http(s)");
         using var settings = new CoreSettingsForm(new());
+        var delayToggle = All(settings).OfType<CheckBox>().Single(c => c.AccessibleName == "Real delay test");
+        var delayUrl = All(settings).OfType<ComboBox>().Single(c => c.AccessibleName == "Delay test URL");
+        delayToggle.Checked = true; delayToggle.Checked = false;
+        Check(!delayUrl.Enabled, "Disabling real delay test disables its URL");
+        delayToggle.Checked = true;
+        Check(delayUrl.Enabled, "Enabling real delay test restores its URL");
         foreach (var size in new[] { new Size(520, 460), new Size(800, 650), new Size(1200, 800) })
         {
             settings.Size = size; settings.PerformLayout();

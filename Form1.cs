@@ -14,29 +14,42 @@ public partial class Form1 : Form
     private CancellationTokenSource? _attemptCts;
     private bool _nextRequested;
     private CoreOptions _coreOptions = new();
-    private readonly int[] _protocolIndexes = [-1, .. Aether.MenuPresetIndexes];
+    private int[] _protocolIndexes = [-1, .. Aether.MenuPresetIndexes];
     private static readonly string[] ScanModes = ["turbo", "balanced"]; // saved as an index into this
     private Dictionary<int, int> _connectMs = []; // preset index -> ms its last connect took, -1 = failed; orders Auto
 
     public Form1()
     {
         InitializeComponent();
-        cboProtocol.Items.Add("Auto (order in Core settings)");
-        cboProtocol.Items.AddRange(Aether.MenuPresetIndexes.Select(i => (object)Aether.Presets[i].Label).ToArray());
         cboScan.Items.AddRange(["Fast: first server that answers", "Balanced: tries a few, keeps the fastest"]);
+        var savedProtocol = 0;
+        string? savedMenuText = null;
         using (var key = Registry.CurrentUser.OpenSubKey(SettingsKey))
         {
             chkStartup.Checked = key?.GetValue("AutoConnect") is 1;
             chkSysProxy.Checked = key?.GetValue("SetSystemProxy") is 1;
             chkPsiphon.Checked = key?.GetValue("RunPsiphon") is not 0; // on unless turned off, as before this option
             chkShowLog.Checked = key?.GetValue("ShowActivity") is not 0; // on unless turned off
-            var saved = key?.GetValue("Protocol") is int i && i >= 0 && i <= Aether.Presets.Length ? i : 0;
-            cboProtocol.SelectedIndex = Array.IndexOf(_protocolIndexes, saved - 1);
+            savedProtocol = key?.GetValue("Protocol") is int i && i >= 0 && i <= Aether.Presets.Length ? i : 0;
+            savedMenuText = key?.GetValue("MenuOrder") as string;
             cboScan.SelectedIndex = key?.GetValue("Scan") is 1 ? 1 : 0;
             numTrySeconds.Value = key?.GetValue("TrySeconds") is int seconds && seconds >= numTrySeconds.Minimum && seconds <= numTrySeconds.Maximum
                 ? seconds : Aether.FastSecs;
             _connectMs = Aether.ParseConnectMs(key?.GetValue("ConnectMs") as string);
+            if (key?.GetValue("OrderVersion") is not 3)
+            {
+                Aether.SavedOrder = []; // apply the new preferred order once
+                SaveSetting("OrderVersion", 3);
+            }
         }
+        var autoOrder = Aether.AutoOrder(_connectMs, Aether.SavedOrder).Select(p => Array.IndexOf(Aether.Presets, p)).ToArray();
+        var savedMenu = Aether.ParseOrder(savedMenuText);
+        var menuOrder = savedMenu.Length == Aether.Presets.Length
+            ? savedMenu : [.. autoOrder, .. Aether.MenuPresetIndexes.Except(autoOrder)];
+        _protocolIndexes = [-1, .. menuOrder];
+        cboProtocol.Items.Add("Auto (order in Core settings)");
+        cboProtocol.Items.AddRange(_protocolIndexes.Skip(1).Select(i => (object)Aether.Presets[i].Label).ToArray());
+        cboProtocol.SelectedIndex = Math.Max(0, Array.IndexOf(_protocolIndexes, savedProtocol - 1));
         try { _coreOptions = CoreOptions.Load(); }
         catch { chkStartup.Checked = false; Log("Could not load core settings. Review settings before connecting."); }
         cboProtocol.SelectedIndexChanged += (_, _) => SaveSetting("Protocol", _protocolIndexes[cboProtocol.SelectedIndex] + 1);
@@ -90,15 +103,8 @@ public partial class Form1 : Form
         e.DrawFocusRectangle();
     }
 
-    // The window grows to make room for the log and shrinks back when it is hidden.
-    private void ShowLog(bool show)
-    {
-        int Px(int v) => IsHandleCreated ? LogicalToDeviceUnits(v) : v; // before the handle, Dpi autoscale scales these later
-        var change = show ? Px(157) : -Px(157); // 400 <-> 557; the log also fills spare room, so never shrink by its height
-        txtMiniLog.Visible = show;
-        MinimumSize = new Size(MinimumSize.Width, MinimumSize.Height + (show ? Px(50) : -Px(50)));
-        Height += change;
-    }
+    // The log fills the empty space under the controls; showing it does not resize the window.
+    private void ShowLog(bool show) => txtMiniLog.Visible = show;
 
     private static void SaveSetting(string name, bool value) => SaveSetting(name, value ? 1 : 0);
 
@@ -199,12 +205,13 @@ public partial class Form1 : Form
         if (proc is null) return;
 
         var took = Stopwatch.StartNew();
-        var ms = await Aether.WaitConnectedAsync(proc, startupSeconds, ct);
-        _connectMs[Array.IndexOf(Aether.Presets, p)] = ms is null ? -1 : (int)took.ElapsedMilliseconds;
+        var realDelayTest = Aether.RealDelayTest;
+        var (connected, ms) = await Aether.WaitConnectedAsync(proc, startupSeconds, ct, realDelayTest);
+        _connectMs[Array.IndexOf(Aether.Presets, p)] = connected ? (int)took.ElapsedMilliseconds : -1;
         SaveSetting("ConnectMs", Aether.FormatConnectMs(_connectMs));
         var order = Aether.AutoOrder(_connectMs, Aether.SavedOrder).Select(x => Array.IndexOf(Aether.Presets, x)).ToArray();
         Aether.SavedOrder = Aether.Rerank(order, _connectMs, Array.IndexOf(Aether.Presets, p));
-        if (ms is null)
+        if (!connected)
         {
             Log(proc.HasExited ? $"{p.Name}: process exited." : $"{p.Name}: no internet, switching.");
             KillProcess();
@@ -213,17 +220,28 @@ public partial class Form1 : Form
 
         if (chkSysProxy.Checked) SystemProxy.Enable();
         SetStatus($"Connected: {p.Name}", Palette.Connected);
-        Log($"Connected via {p.Name} in {took.Elapsed.TotalSeconds:0.0}s, delay {ms} ms.");
+        Log(realDelayTest
+            ? $"Connected via {p.Name} in {took.Elapsed.TotalSeconds:0.0}s, delay {ms} ms."
+            : $"Connected via {p.Name} in {took.Elapsed.TotalSeconds:0.0}s; local proxy ready, internet not tested.");
         // The core's own psiphon modes already run Psiphon; a second one on top only slows it down.
         if (chkPsiphon.Checked && !p.Args.Contains("psiphon")) _ = StartPsiphonAsync(ct); // a download must not hold up the connection monitor below
-        for (int fails = 0; fails < 2;)
+        if (!realDelayTest)
         {
-            lblDelay.Text = ms is null ? "Delay: timeout" : $"Delay: {ms} ms";
-            lblDelay.ForeColor = PingColor(ms);
-            await Task.Delay(5000, ct);
-            if (proc.HasExited) break;
-            ms = await Aether.PingAsync(ct);
-            fails = ms is null ? fails + 1 : 0;
+            lblDelay.Text = "Delay: not tested";
+            lblDelay.ForeColor = SystemColors.ControlText;
+            while (!proc.HasExited) await Task.Delay(1000, ct);
+        }
+        else
+        {
+            for (int fails = 0; fails < 2;)
+            {
+                lblDelay.Text = ms is null ? "Delay: timeout" : $"Delay: {ms} ms";
+                lblDelay.ForeColor = PingColor(ms);
+                await Task.Delay(5000, ct);
+                if (proc.HasExited) break;
+                ms = await Aether.PingAsync(ct);
+                fails = ms is null ? fails + 1 : 0;
+            }
         }
         Log($"{p.Name}: connection lost, switching.");
         KillProcess();
@@ -276,8 +294,27 @@ public partial class Form1 : Form
     private void ShowCoreSettings()
     {
         if (_cts != null) return;
-        using var dialog = new CoreSettingsForm(_coreOptions, _connectMs);
-        if (dialog.ShowDialog(this) == DialogResult.OK) _coreOptions = dialog.Options;
+        using var dialog = new CoreSettingsForm(_coreOptions, _connectMs, _protocolIndexes.Skip(1).ToArray());
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+        {
+            _coreOptions = dialog.Options;
+            RefreshProtocolMenu(dialog.MenuOrder);
+        }
+    }
+
+    // Keep the main list in the same order the user set in Core settings > Auto order.
+    private void RefreshProtocolMenu(int[]? menuOrder = null)
+    {
+        var selected = cboProtocol.SelectedIndex >= 0 && cboProtocol.SelectedIndex < _protocolIndexes.Length
+            ? _protocolIndexes[cboProtocol.SelectedIndex] : -1;
+        var order = (menuOrder ?? _protocolIndexes.Skip(1).ToArray()).Where(i => i >= 0 && i < Aether.Presets.Length).Distinct().ToList();
+        order.AddRange(Aether.MenuPresetIndexes.Except(order));
+        _protocolIndexes = [-1, .. order];
+        cboProtocol.Items.Clear();
+        cboProtocol.Items.Add("Auto (order in Core settings)");
+        cboProtocol.Items.AddRange(_protocolIndexes.Skip(1).Select(i => (object)Aether.Presets[i].Label).ToArray());
+        cboProtocol.SelectedIndex = Math.Max(0, Array.IndexOf(_protocolIndexes, selected));
+        SaveSetting("MenuOrder", string.Join(",", order));
     }
 
     // Updates are offered in a dialog, at startup too, so they are seen with the log hidden; only the

@@ -65,6 +65,20 @@ static class Aether
         }
     }
 
+    public static bool RealDelayTest
+    {
+        get
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(PortsKey);
+            return key?.GetValue("RealDelayTest") is not 0;
+        }
+        set
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(PortsKey);
+            key.SetValue("RealDelayTest", value ? 1 : 0);
+        }
+    }
+
     // null when usable, otherwise why not.
     public static string? ValidTestUrl(string text) =>
         Uri.TryCreate(text.Trim(), UriKind.Absolute, out var u) && u.Scheme is "http" or "https" && u.Host.Length > 0
@@ -112,9 +126,26 @@ static class Aether
         new("WireGuard-in-MASQUE HTTP/2", "--gool --h2" + Warp),
     };
 
+    // Preferred Psiphon routes stay at the top of the main protocol list and fresh Auto order.
+    private static readonly string[] PreferredAutoPresets =
+    [
+        "MASQUE HTTP/2 → Psiphon",
+        "MASQUE-in-MASQUE → Psiphon",
+        "WARP-in-WARP → Psiphon",
+    ];
+
+    private static int PreferredPriority(string name)
+    {
+        var i = Array.IndexOf(PreferredAutoPresets, name);
+        return i < 0 ? PreferredAutoPresets.Length : i;
+    }
+
     // Display order is separate from persisted preset indexes.
     public static readonly int[] MenuPresetIndexes = Enumerable.Range(0, Presets.Length)
-        .OrderBy(i => Presets[i].ManualOnly).ToArray();
+        .OrderBy(i => Presets[i].ManualOnly)
+        .ThenBy(i => Presets[i].ManualOnly ? 0 : PreferredPriority(Presets[i].Name))
+        .ThenBy(i => i)
+        .ToArray();
 
     public static int NextPresetIndex(int current)
     {
@@ -144,13 +175,16 @@ static class Aether
     public static int[] ParseOrder(string? text) => (text ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries)
         .Select(s => int.TryParse(s, out var i) ? i : -1).Where(i => i >= 0 && i < Presets.Length).Distinct().ToArray();
 
-    // A saved order is used as is. Otherwise from past connects (preset index -> ms to connect, -1 = failed last time):
-    // fastest first, then never tried (WireGuard first), then failed; other ties shuffled (OrderBy is stable).
+    // A saved order is used as is. Otherwise the preferred Psiphon routes come first, then from past connects
+    // (preset index -> ms to connect, -1 = failed last time): fastest first, then WireGuard on a fresh run,
+    // then never tried, then failed; other ties shuffled (OrderBy is stable).
     public static List<Preset> AutoOrder(IReadOnlyDictionary<int, int> connectMs, int[]? saved = null) => saved is { Length: > 0 }
         ? saved.Select(i => Presets[i]).ToList()
         : AutoPresets
         .OrderBy(_ => Random.Shared.Next())
-        .OrderBy(p => SpeedKey(connectMs, Array.IndexOf(Presets, p)))
+        .OrderBy(p => PreferredPriority(p.Name) < PreferredAutoPresets.Length ? 0 : 1)
+        .ThenBy(p => PreferredPriority(p.Name))
+        .ThenBy(p => SpeedKey(connectMs, Array.IndexOf(Presets, p)))
         .ThenBy(p => p.Name == "WireGuard" && !connectMs.ContainsKey(Array.IndexOf(Presets, p)) ? 0 : 1)
         .ToList();
 
@@ -343,21 +377,26 @@ static class Aether
         finally { if (!proc.HasExited) proc.Kill(true); }
     }
 
-    // Waits for a passing internet test through aether's proxy. Gives up once the startup budget is spent
+    // Waits for the proxy and, unless disabled, a passing internet test. Gives up once the startup budget is spent
     // and the proxy has been up for ConnectTimeoutMs without passing (tor opens its port long before it can carry traffic).
-    public static async Task<int?> WaitConnectedAsync(Process proc, int startupSecs, CancellationToken ct)
+    public static async Task<(bool Connected, int? DelayMs)> WaitConnectedAsync(
+        Process proc, int startupSecs, CancellationToken ct, bool realDelayTest = true)
     {
         var sw = Stopwatch.StartNew();
         long? upAt = null;
         while (!proc.HasExited)
         {
-            if (upAt is null && await PortOpenAsync(ct)) upAt = sw.ElapsedMilliseconds;
-            if (upAt is not null && await PingAsync(ct) is int ms) return ms;
+            if (upAt is null && await PortOpenAsync(ct))
+            {
+                upAt = sw.ElapsedMilliseconds;
+                if (!realDelayTest) return (true, null);
+            }
+            if (upAt is not null && await PingAsync(ct) is int ms) return (true, ms);
             var t = sw.ElapsedMilliseconds;
-            if (t > startupSecs * 1000 && (upAt is null || t - upAt > ConnectTimeoutMs)) return null;
+            if (t > startupSecs * 1000 && (upAt is null || t - upAt > ConnectTimeoutMs)) return (false, null);
             await Task.Delay(500, ct);
         }
-        return null;
+        return (false, null);
     }
 
     private static async Task<bool> PortOpenAsync(CancellationToken ct)

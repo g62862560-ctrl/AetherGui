@@ -2,24 +2,19 @@ import 'package:flutter/material.dart';
 
 import 'aether.dart';
 
-// Every checked item steps one place up (-1) or down (+1) past an unchecked neighbour;
-// checked ones keep their own order.
-void moveChecked(List<int> items, Set<int> on, int delta) {
-  final n = items.length;
-  for (var k = 0; k < n; k++) {
-    final i = delta < 0 ? k : n - 1 - k, j = i + delta;
-    if (j < 0 || j >= n || !on.contains(items[i]) || on.contains(items[j])) {
-      continue;
-    }
-    items.insert(j, items.removeAt(i));
-  }
-}
+typedef AutoOrderResult = ({List<int> order, List<int> checked});
 
 // Which protocols Auto tries, top first. The app keeps this order current after each connect;
-// the user may drag or uncheck any of them. Pops the checked preset indexes on Save.
+// the user may drag or uncheck any of them. Pops the full list order and checked indexes on Save.
 class AutoOrderPage extends StatefulWidget {
-  const AutoOrderPage({super.key, required this.order, required this.ranking});
-  final List<int> order; // what Auto uses now
+  const AutoOrderPage({
+    super.key,
+    required this.order,
+    required this.checked,
+    required this.ranking,
+  });
+  final List<int> order; // full main-list order
+  final List<int> checked; // what Auto uses now
   final List<int> ranking; // the plain speed ranking, for Reset
   @override
   State<AutoOrderPage> createState() => _AutoOrderPageState();
@@ -32,32 +27,41 @@ class _AutoOrderPageState extends State<AutoOrderPage> {
   @override
   void initState() {
     super.initState();
-    _fill(widget.order);
+    _fill(widget.order, widget.checked);
   }
 
-  // The given order checked, then every other preset unchecked (fast ones first).
-  void _fill(List<int> first) {
-    _on = {...first};
-    _items = [
-      ...first,
-      for (final manualOnly in [false, true])
-        for (final (i, p) in Aether.presets.indexed)
-          if (p.manualOnly == manualOnly && !_on.contains(i)) i,
-    ];
+  void _fill(List<int> order, List<int> checked) {
+    _on = {...checked};
+    final items = <int>[];
+    for (final i in order) {
+      if (i >= 0 && i < Aether.presets.length && !items.contains(i)) {
+        items.add(i);
+      }
+    }
+    items.addAll(Aether.menuPresetIndexes.where((i) => !items.contains(i)));
+    _items = items;
+  }
+
+  void _reset() {
+    final auto = [...widget.ranking];
+    _fill([
+      ...auto,
+      ...Aether.menuPresetIndexes.where((i) => !auto.contains(i)),
+    ], auto);
   }
 
   void _save() {
-    final order = [
+    final checked = [
       for (final i in _items)
         if (_on.contains(i)) i,
     ];
-    if (order.isEmpty) {
+    if (checked.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Check at least one protocol for Auto.')),
       );
       return;
     }
-    Navigator.pop(context, order);
+    Navigator.pop(context, (order: _items, checked: checked));
   }
 
   @override
@@ -65,18 +69,8 @@ class _AutoOrderPageState extends State<AutoOrderPage> {
     appBar: AppBar(
       title: const Text('Auto order'),
       actions: [
-        IconButton(
-          tooltip: 'Move checked up',
-          icon: const Icon(Icons.arrow_upward_rounded),
-          onPressed: () => setState(() => moveChecked(_items, _on, -1)),
-        ),
-        IconButton(
-          tooltip: 'Move checked down',
-          icon: const Icon(Icons.arrow_downward_rounded),
-          onPressed: () => setState(() => moveChecked(_items, _on, 1)),
-        ),
         TextButton(
-          onPressed: () => setState(() => _fill(widget.ranking)),
+          onPressed: () => setState(_reset),
           child: const Text('Reset'),
         ),
         TextButton(onPressed: _save, child: const Text('Save')),
@@ -89,18 +83,18 @@ class _AutoOrderPageState extends State<AutoOrderPage> {
           child: Text(
             'Auto tries the checked protocols from the top. After each try the app moves that '
             'protocol by its speed (to the bottom if it failed); your own moves stay otherwise. '
-            'Drag the handle to reorder, or use the arrows to move all checked protocols one step. '
-            'Reset restores the speed ranking.',
+            'Drag the handle to reorder. Reset restores the speed ranking.',
             style: TextStyle(fontSize: 13),
           ),
         ),
         Expanded(
           child: ReorderableListView(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+            buildDefaultDragHandles: false,
             onReorderItem: (from, to) =>
                 setState(() => _items.insert(to, _items.removeAt(from))),
             children: [
-              for (final i in _items)
+              for (final (index, i) in _items.indexed)
                 CheckboxListTile(
                   key: ValueKey(i),
                   controlAffinity: ListTileControlAffinity.leading,
@@ -108,6 +102,10 @@ class _AutoOrderPageState extends State<AutoOrderPage> {
                   value: _on.contains(i),
                   onChanged: (v) =>
                       setState(() => v == true ? _on.add(i) : _on.remove(i)),
+                  secondary: ReorderableDragStartListener(
+                    index: index,
+                    child: const Icon(Icons.drag_handle_rounded),
+                  ),
                 ),
             ],
           ),

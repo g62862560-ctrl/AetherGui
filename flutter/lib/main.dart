@@ -7,6 +7,7 @@ import 'aether.dart';
 import 'auto_order_page.dart';
 import 'core_options.dart';
 import 'core_settings_page.dart';
+import 'protocol_order_sheet.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -80,9 +81,11 @@ class _HomePageState extends State<HomePage> {
   String _scan = 'turbo'; // AETHER_SCAN: turbo or balanced
   bool _vpn = true; // full-device VPN (tun); false = only serve the local proxy
   bool _showActivity = true;
+  bool _realDelayTest = true;
   String _status = 'Disconnected';
   Color _statusColor = red;
   String _delay = ''; // e.g. '24 ms', shown beside the route while connected
+  String? _appVersion;
   String? _route; // preset being tried or used right now
   String? _error; // latest failure, shown on Home until connected or dismissed
   int? _busyPort,
@@ -102,6 +105,8 @@ class _HomePageState extends State<HomePage> {
   var _connectMs = <int, int>{};
   // Auto's order as preset indexes, kept current after each connect and editable; empty = speed ranking
   var _order = <int>[];
+  // Display order of every protocol in the main list, editable by dragging.
+  var _menuOrder = <int>[];
 
   File get _settings => File('${Aether.dir}/settings.txt');
 
@@ -125,6 +130,7 @@ class _HomePageState extends State<HomePage> {
       if (s.contains('Scan=balanced')) _scan = 'balanced';
       _vpn = !s.contains('Mode=proxy');
       _showActivity = !s.contains('ShowActivity=0');
+      _realDelayTest = !s.contains('RealDelayTest=0');
       final http = RegExp(r'HttpPort=(\d+)').firstMatch(s)?.group(1) ?? '';
       final socks = RegExp(r'SocksPort=(\d+)').firstMatch(s)?.group(1) ?? '';
       if (Aether.portError(http, int.tryParse(socks) ?? 0) == null &&
@@ -137,9 +143,12 @@ class _HomePageState extends State<HomePage> {
       _connectMs = Aether.parseConnectMs(
         RegExp(r'ConnectMs=(.*)').firstMatch(s)?.group(1),
       );
-      _order = Aether.parseOrder(
-        RegExp(r'AutoOrder=(.*)').firstMatch(s)?.group(1),
-      );
+      _order = s.contains('OrderVersion=3')
+          ? Aether.parseOrder(RegExp(r'AutoOrder=(.*)').firstMatch(s)?.group(1))
+          : [];
+      _menuOrder = s.contains('OrderVersion=3')
+          ? Aether.parseOrder(RegExp(r'MenuOrder=(.*)').firstMatch(s)?.group(1))
+          : [];
     } catch (_) {}
     try {
       _coreOptions = CoreOptions.load(Aether.dir);
@@ -151,11 +160,20 @@ class _HomePageState extends State<HomePage> {
     }
     // Fix the shuffled ties once, so the order shown in Settings does not jump on every rebuild.
     if (_order.isEmpty) _order = _autoIndexes();
+    if (_menuOrder.length != Aether.presets.length ||
+        _menuOrder.toSet().length != Aether.presets.length) {
+      _menuOrder = [
+        ..._order,
+        ...Aether.menuPresetIndexes.where((i) => !_order.contains(i)),
+      ];
+    }
     _httpPortText.text = '${Aether.httpPort}';
     _socksPortText.text = '${Aether.socksPort}';
     _testUrlText.text = Aether.testUrl;
     _trySecondsText.text = '$_trySeconds';
+    _saveSettings(); // persist the one-time Auto-order migration and defaults
     _checkUpdates(interactive: false);
+    _loadVersion();
     if (_autoConnect) {
       _log('Auto-connecting in ${startupDelayMs ~/ 1000}s...');
       Future.delayed(const Duration(milliseconds: startupDelayMs), () {
@@ -179,6 +197,29 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _connect() async {
     if (_ct != null) return _ct!.cancel();
+    if (await Aether.vpnActive()) {
+      final proceed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Another VPN is active'),
+          content: const Text(
+            'Another VPN may route Aether through a broken connection. '
+            'Disable it first, or continue at your own risk.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Continue'),
+            ),
+          ],
+        ),
+      );
+      if (proceed != true) return;
+    }
     final ct = _ct = Cancel();
     setState(() {
       _clearError();
@@ -195,8 +236,11 @@ class _HomePageState extends State<HomePage> {
     'ShowActivity=${_showActivity ? 1 : 0}\n'
     'HttpPort=${Aether.httpPort}\nSocksPort=${Aether.socksPort}\n'
     'TestUrl=${Aether.testUrl}\n'
+    'RealDelayTest=${_realDelayTest ? 1 : 0}\n'
     'ConnectMs=${Aether.formatConnectMs(_connectMs)}\n'
     'AutoOrder=${_order.join(',')}\n'
+    'MenuOrder=${_menuOrder.join(',')}\n'
+    'OrderVersion=3\n'
     'TrySeconds=$_trySeconds\n',
   );
 
@@ -243,7 +287,13 @@ class _HomePageState extends State<HomePage> {
           await attempt.delay(1000);
         } on Cancelled {
           if (ct.isCancelled) rethrow;
-          _killProcess();
+          await _killProcessAndWait();
+          if (_vpn) {
+            await Aether.vpnStop();
+            for (var i = 0; i < 10 && await Aether.vpnActive(); i++) {
+              await Future.delayed(const Duration(milliseconds: 100));
+            }
+          }
           if (chosen >= 0)
             chosen = Aether.nextPresetIndex(Aether.presets.indexOf(p));
           _step(
@@ -265,7 +315,7 @@ class _HomePageState extends State<HomePage> {
       _attempt = null;
       _nextRequested = false;
       Aether.vpnStop();
-      _killProcess();
+      await _killProcessAndWait();
       _setStatus('Disconnected', red);
       _setDelay('');
       _route = null;
@@ -300,6 +350,15 @@ class _HomePageState extends State<HomePage> {
       }
     }
 
+    // Let an old aether process release its ports before starting a new one.
+    for (var i = 0; i < 25; i++) {
+      if (await Aether.portFree(Aether.socksPort) &&
+          await Aether.portFree(Aether.httpPort)) {
+        break;
+      }
+      await Future.delayed(const Duration(milliseconds: 200));
+    }
+
     final proc = _process = await Aether.start(p, coreLog, _coreOptions, _scan);
     ct.check();
     if (proc == null) {
@@ -314,38 +373,56 @@ class _HomePageState extends State<HomePage> {
     }
     _step('Core started, waiting for local proxy...');
 
+    // Take over the system VPN before testing, so a broken VPN does not block Aether.
+    var vpnStarted = false;
+    for (var i = 0; i < 25; i++) {
+      if (await Aether.portOpen()) break;
+      await Future.delayed(const Duration(milliseconds: 200));
+    }
+    if (_vpn) {
+      if (await Aether.vpnActive()) {
+        vpnStarted = true;
+      } else {
+        vpnStarted = await Aether.vpnStart();
+      }
+    }
+
     final took = Stopwatch()..start();
-    int? ms = await Aether.waitConnected(
+    final realDelayTest = _realDelayTest;
+    var (connected, ms) = await Aether.waitConnected(
       proc,
       _coreOptions.isConfigured ? _coreOptions.startupSeconds : startupSeconds,
       ct,
       _step,
+      realDelayTest,
     );
-    if (portConflict) return _killProcess(); // says nothing about this preset
-    _connectMs[Aether.presets.indexOf(p)] = ms == null
-        ? -1
-        : took.elapsedMilliseconds;
+    if (portConflict) return _killProcessAndWait(); // says nothing about this preset
+    _connectMs[Aether.presets.indexOf(p)] = connected
+        ? took.elapsedMilliseconds
+        : -1;
     _order = Aether.rerank(
       _autoIndexes(_order),
       _connectMs,
       Aether.presets.indexOf(p),
     );
     _saveSettings();
-    if (ms == null) {
+    if (!connected) {
       final failure = proc.exited
           ? '${p.name}: process exited.'
           : '${p.name}: no internet, switching.';
       // Keep the core's own message: it says why, this line only says what happened.
       coreFailed ? _log(failure) : _logError(failure);
       _addStep(failure, red);
-      _killProcess();
+      await _killProcessAndWait();
       return;
     }
 
     _setStatus('Connected: ${p.name}', seaGreen);
     if (mounted) setState(() => _error = null);
     _step(
-      'Connected via ${p.name} in ${(took.elapsedMilliseconds / 1000).toStringAsFixed(1)}s, delay $ms ms.',
+      realDelayTest
+          ? 'Connected via ${p.name} in ${(took.elapsedMilliseconds / 1000).toStringAsFixed(1)}s, delay $ms ms.'
+          : 'Connected via ${p.name} in ${(took.elapsedMilliseconds / 1000).toStringAsFixed(1)}s; local proxy ready, internet not tested.',
       seaGreen,
     );
     if (!_vpn) {
@@ -353,22 +430,27 @@ class _HomePageState extends State<HomePage> {
         'Proxy only: HTTP 127.0.0.1:${Aether.httpPort}, SOCKS5 127.0.0.1:${Aether.socksPort}.',
         seaGreen,
       );
-    } else if (await Aether.vpnStart()) {
+    } else if (vpnStarted || await Aether.vpnStart()) {
       _step('VPN on: all apps go through aether.', seaGreen);
     } else {
       _logError('VPN permission denied: proxy only.');
       _addStep('VPN permission denied: proxy only.', red);
     }
-    for (var fails = 0; fails < 2;) {
-      _setDelay(ms == null ? 'timeout' : '$ms ms');
-      await ct.delay(5000);
-      if (proc.exited) break;
-      ms = await Aether.ping(ct);
-      fails = ms == null ? fails + 1 : 0;
+    if (!realDelayTest) {
+      _setDelay('not tested');
+      while (!proc.exited) await ct.delay(1000);
+    } else {
+      for (var fails = 0; fails < 2;) {
+        _setDelay(ms == null ? 'timeout' : '$ms ms');
+        await ct.delay(5000);
+        if (proc.exited) break;
+        ms = await Aether.ping(ct);
+        fails = ms == null ? fails + 1 : 0;
+      }
     }
     _logError('${p.name}: connection lost, switching.');
     _addStep('${p.name}: connection lost, switching.', red);
-    _killProcess();
+    await _killProcessAndWait();
   }
 
   // Every preset needs this port, so rotating on cannot help: stop and let the user choose.
@@ -451,8 +533,19 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _killProcess() {
-    _process?.p.kill(ProcessSignal.sigkill);
+    final proc = _process;
     _process = null;
+    proc?.p.kill(ProcessSignal.sigkill);
+  }
+
+  Future<void> _killProcessAndWait() async {
+    final proc = _process;
+    _process = null;
+    if (proc == null) return;
+    proc.p.kill(ProcessSignal.sigkill);
+    try {
+      await proc.p.exitCode.timeout(const Duration(seconds: 2));
+    } catch (_) {}
   }
 
   Future<void> _showCoreSettings() async {
@@ -466,15 +559,21 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _showAutoOrder() async {
-    final order = await Navigator.push<List<int>>(
+    final result = await Navigator.push<AutoOrderResult>(
       context,
       MaterialPageRoute(
-        builder: (_) =>
-            AutoOrderPage(order: _autoIndexes(_order), ranking: _autoIndexes()),
+        builder: (_) => AutoOrderPage(
+          order: _menuOrder,
+          checked: _order,
+          ranking: _autoIndexes(),
+        ),
       ),
     );
-    if (!mounted || order == null) return;
-    setState(() => _order = order);
+    if (!mounted || result == null) return;
+    setState(() {
+      _menuOrder = [...result.order];
+      _order = [...result.checked];
+    });
     _saveSettings();
   }
 
@@ -622,6 +721,11 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  Future<void> _loadVersion() async {
+    final version = await Aether.appVersion();
+    if (mounted) setState(() => _appVersion = version);
+  }
+
   void _setStatus(String text, Color color) {
     if (mounted)
       setState(() {
@@ -737,7 +841,9 @@ class _HomePageState extends State<HomePage> {
                             if (_statusColor == seaGreen && _delay.isNotEmpty)
                               Text.rich(
                                 TextSpan(
-                                  text: 'Ping ',
+                                  text: _delay == 'not tested'
+                                      ? 'Delay '
+                                      : 'Ping ',
                                   style: const TextStyle(
                                     color: Palette.secondaryText,
                                   ),
@@ -745,7 +851,9 @@ class _HomePageState extends State<HomePage> {
                                     TextSpan(
                                       text: _delay,
                                       style: TextStyle(
-                                        color: _pingColor(_delay),
+                                        color: _delay == 'not tested'
+                                            ? Palette.secondaryText
+                                            : _pingColor(_delay),
                                         fontWeight: FontWeight.w600,
                                       ),
                                     ),
@@ -809,6 +917,17 @@ class _HomePageState extends State<HomePage> {
                   ],
                   if (!_vpn) ...[_proxyCard(), const SizedBox(height: 8)],
                   _quickSettings(),
+                   if (_appVersion != null) ...[
+                     const SizedBox(height: 8),
+                     Text(
+                       'Aether $_appVersion',
+                       textAlign: TextAlign.center,
+                       style: const TextStyle(
+                         color: Palette.secondaryText,
+                         fontSize: 12,
+                       ),
+                     ),
+                   ],
                 ],
               ),
             ),
@@ -888,30 +1007,41 @@ class _HomePageState extends State<HomePage> {
   }
 
   // The main connection choice stays on Home; Auto's detailed order remains in Settings.
-  Widget _protocolMenu(bool busy) => DropdownMenu<int>(
-    key: const Key('connectionProtocol'),
-    label: const Text('Protocol'),
-    leadingIcon: const Icon(Icons.vpn_lock_outlined),
-    expandedInsets: EdgeInsets.zero,
-    enabled: !busy, // pick before connecting; Disconnect to change
-    initialSelection: _preset,
-    dropdownMenuEntries: [
-      const DropdownMenuEntry(value: -1, label: 'Auto (order in Settings)'),
-      // Keep persisted values stable while displaying Auto presets first.
-      for (final i in Aether.menuPresetIndexes)
-        DropdownMenuEntry(
-          value: i,
-          label: Aether.presets[i].label,
-          leadingIcon: Aether.presets[i].name.contains('Psiphon')
-              ? Image.asset('assets/psiphon.png', width: 20)
-              : const SizedBox(width: 20), // keeps names lined up
-        ),
-    ],
-    onSelected: (v) {
-      setState(() => _preset = v ?? -1);
-      _saveSettings();
-    },
-  );
+  Widget _protocolMenu(bool busy) {
+    final label = _preset < 0
+        ? 'Auto (order in Settings)'
+        : Aether.presets[_preset].label;
+    return ListTile(
+      key: const Key('connectionProtocol'),
+      enabled: !busy,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(4),
+        side: BorderSide(color: Theme.of(context).dividerColor),
+      ),
+      leading: const Icon(Icons.vpn_lock_outlined),
+      title: Text(label),
+      subtitle: const Text('Tap to choose or drag to reorder'),
+      trailing: const Icon(Icons.unfold_more_rounded),
+      onTap: busy ? null : _editProtocolOrder,
+    );
+  }
+
+  Future<void> _editProtocolOrder() async {
+    final result = await showModalBottomSheet<ProtocolOrderResult>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) =>
+          ProtocolOrderSheet(order: _menuOrder, selected: _preset),
+    );
+    if (!mounted || result == null) return;
+    setState(() {
+      _menuOrder = [...result.order];
+      final checked = _order.toSet();
+      _order = [for (final i in _menuOrder) if (checked.contains(i)) i];
+      _preset = result.selected;
+    });
+    _saveSettings();
+  }
 
   // Proxy mode: nothing is routed for the user, so show where to point apps, ready to copy.
   Widget _proxyCard() {
@@ -1226,14 +1356,31 @@ class _HomePageState extends State<HomePage> {
                   },
           ),
           const SizedBox(height: 16),
+          SwitchListTile(
+            secondary: const Icon(Icons.network_check_rounded),
+            title: const Text('Real delay test'),
+            subtitle: const Text(
+              'Verify internet access and measure delay. When off, only the local proxy is checked.',
+            ),
+            value: _realDelayTest,
+            onChanged: busy
+                ? null
+                : (v) {
+                    setState(() => _realDelayTest = v);
+                    _saveSettings();
+                  },
+          ),
           // Typed URLs are saved once valid; the menu offers well-known ones.
           TextField(
             controller: _testUrlText,
+            enabled: _realDelayTest,
             keyboardType: TextInputType.url,
             decoration: InputDecoration(
               labelText: 'Delay test URL',
               helperText: 'Any http(s) page; the ping is how long it takes',
-              errorText: Aether.testUrlError(_testUrlText.text),
+              errorText: _realDelayTest
+                  ? Aether.testUrlError(_testUrlText.text)
+                  : null,
               suffixIcon: PopupMenuButton<String>(
                 tooltip: 'Suggested URLs',
                 icon: const Icon(Icons.arrow_drop_down_rounded),

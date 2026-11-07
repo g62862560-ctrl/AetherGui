@@ -179,9 +179,22 @@ class Aether {
   ];
 
   static final menuPresetIndexes = [
-    for (final manualOnly in [false, true])
-      for (final (i, p) in presets.indexed)
-        if (p.manualOnly == manualOnly) i,
+    ...(() {
+      final auto = [
+        for (final (i, p) in presets.indexed)
+          if (!p.manualOnly) i,
+      ];
+      auto.sort(
+        (a, b) => _preferredPriority(
+          presets[a].name,
+        ).compareTo(_preferredPriority(presets[b].name)),
+      );
+      final manual = [
+        for (final (i, p) in presets.indexed)
+          if (p.manualOnly) i,
+      ];
+      return [...auto, ...manual];
+    })(),
   ];
 
   static int nextPresetIndex(int current) {
@@ -218,9 +231,28 @@ class Aether {
   static const guiRepo = 'g62862560-ctrl/AetherGui';
   static Future<String?> appVersion() => _ch.invokeMethod<String>('appVersion');
   static Future<void> openUrl(String url) => _ch.invokeMethod('openUrl', url);
+  static Future<bool> vpnActive() async {
+    try {
+      return await _ch.invokeMethod<bool>('vpnActive') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
   static Future<void> vpnSettings() => _ch.invokeMethod('vpnSettings');
 
   // "v1.2.0" or "1.2.0+3" -> [1, 2, 0]; null if it is not a version.
+  // Preferred Psiphon routes stay at the top of a fresh Auto order.
+  static const _preferredAutoPresets = [
+    'MASQUE HTTP/2 → Psiphon',
+    'MASQUE-in-MASQUE → Psiphon',
+    'WARP-in-WARP → Psiphon',
+  ];
+
+  static int _preferredPriority(String name) {
+    final i = _preferredAutoPresets.indexOf(name);
+    return i < 0 ? _preferredAutoPresets.length : i;
+  }
+
   static int _speedKey(Map<int, int> connectMs, int i) =>
       switch (connectMs[i]) {
         null => fastSecs * 1000,
@@ -228,9 +260,10 @@ class Aether {
         final ms => ms,
       };
 
-  // A saved order (kept current by rerank, editable by the user) is used as is. Otherwise from past connects
-  // (preset index -> ms to connect, -1 = failed last time): fastest first, then never tried (WireGuard first),
-  // then failed; other ties shuffled (List.sort is not stable, so ties use the shuffle position).
+  // A saved order (kept current by rerank, editable by the user) is used as is. Otherwise the preferred
+  // Psiphon routes come first, then from past connects (preset index -> ms to connect, -1 = failed last time):
+  // fastest first, then never tried (WireGuard first), then failed; other ties shuffled (List.sort is not
+  // stable, so ties use the shuffle position).
   static List<Preset> autoOrder(Map<int, int> connectMs, [List<int>? saved]) {
     if (saved != null && saved.isNotEmpty)
       return [for (final i in saved) presets[i]];
@@ -241,6 +274,9 @@ class Aether {
     ]..shuffle();
     final rank = {for (final (pos, i) in shuffled.indexed) i: pos};
     shuffled.sort((a, b) {
+      final aPreferred = _preferredPriority(presets[a].name);
+      final bPreferred = _preferredPriority(presets[b].name);
+      if (aPreferred != bPreferred) return aPreferred.compareTo(bPreferred);
       final c = key(a).compareTo(key(b));
       if (c != 0) return c;
       final aDefault =
@@ -424,13 +460,14 @@ class Aether {
     }
   }
 
-  // Waits for a passing internet test through aether's proxy. Gives up once the startup budget is spent
+  // Waits for the proxy and, unless disabled, a passing internet test. Gives up once the startup budget is spent
   // and the proxy has been up for connectTimeoutMs without passing (tor opens its port long before it can carry traffic).
-  static Future<int?> waitConnected(
+  static Future<(bool, int?)> waitConnected(
     AetherProcess proc,
     int startupSecs,
     Cancel ct, [
     Log? step,
+    bool realDelayTest = true,
   ]) async {
     final sw = Stopwatch()..start();
     int? upAt;
@@ -438,24 +475,32 @@ class Aether {
     while (!proc.exited) {
       if (upAt == null && await _portOpen()) {
         upAt = sw.elapsedMilliseconds;
-        step?.call('Local proxy ready, testing internet...');
+        step?.call(
+          realDelayTest
+              ? 'Local proxy ready, testing internet...'
+              : 'Local proxy ready; internet test disabled.',
+        );
+        if (!realDelayTest) return (true, null);
       }
       if (upAt != null) {
         final ms = await ping(ct);
-        if (ms != null) return ms;
+        if (ms != null) return (true, ms);
       }
       final t = sw.elapsedMilliseconds;
       if (t > startupSecs * 1000 &&
           (upAt == null || t - upAt > connectTimeoutMs))
-        return null;
+        return (false, null);
       if (t >= reportAt) {
         reportAt += 15000;
         step?.call('Still connecting: ${t ~/ 1000}s of ${startupSecs}s...');
       }
       await ct.delay(500);
     }
-    return null;
+    return (false, null);
   }
+
+  // Whether aether's local SOCKS port is accepting connections.
+  static Future<bool> portOpen() => _portOpen();
 
   static Future<bool> _portOpen() async {
     try {

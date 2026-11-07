@@ -50,11 +50,16 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('WireGuard').last);
     await tester.pumpAndSettle();
+    await tester.tap(find.text('Done'));
+    await tester.pumpAndSettle();
 
-    final menu = tester.widget<DropdownMenu<int>>(
-      find.byKey(const Key('connectionProtocol')),
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('connectionProtocol')),
+        matching: find.text('WireGuard'),
+      ),
+      findsOneWidget,
     );
-    expect(menu.initialSelection, wireGuard);
     expect(
       File('${dir.path}/settings.txt').readAsStringSync(),
       contains('Preset=$wireGuard'),
@@ -127,21 +132,31 @@ void main() {
       expect(find.text('You are not protected'), findsNothing);
       expect(find.byKey(const Key('connectionProtocol')), findsOneWidget);
       expect(find.text('Waiting for logs...'), findsNothing);
-      final menu = tester.widget<DropdownMenu<int>>(
+      final protocolTile = tester.widget<ListTile>(
         find.byKey(const Key('connectionProtocol')),
       );
-      expect(menu.enabled, isTrue);
-      final entries = menu.dropdownMenuEntries;
-      expect(entries.first.value, -1);
-      final expectedIndexes = [
-        for (final manualOnly in [false, true])
-          for (final (i, p) in Aether.presets.indexed)
-            if (p.manualOnly == manualOnly) i,
+      expect(protocolTile.enabled, isTrue);
+      expect(find.byTooltip('Reorder protocols'), findsNothing);
+
+      // The single protocol list opens with drag handles and the preferred order.
+      await tester.tap(find.byKey(const Key('connectionProtocol')));
+      await tester.pumpAndSettle();
+      expect(find.text('Protocol order'), findsOneWidget);
+      const preferredNames = [
+        'MASQUE HTTP/2 → Psiphon',
+        'MASQUE-in-MASQUE → Psiphon',
+        'WARP-in-WARP → Psiphon',
       ];
-      expect(entries.skip(1).map((e) => e.value), expectedIndexes);
-      for (final entry in entries.skip(1)) {
-        expect(entry.label, Aether.presets[entry.value].label);
+      for (final name in preferredNames) {
+        expect(find.text(name), findsOneWidget);
       }
+      final tops = [
+        for (final name in preferredNames) tester.getTopLeft(find.text(name)).dy,
+      ];
+      expect(tops[0], lessThan(tops[1]));
+      expect(tops[1], lessThan(tops[2]));
+      await tester.tap(find.text('Done'));
+      await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
 
       // Settings keeps Auto order, the log, and core settings; Protocol stays on Home.

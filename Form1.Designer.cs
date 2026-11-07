@@ -91,9 +91,10 @@ partial class Form1
 
         lblStatus = new Label { Text = "●  Disconnected", ForeColor = Palette.Disconnected, AutoSize = true, Font = new Font("Segoe UI", 10F, FontStyle.Bold), Margin = new Padding(0, 0, 0, 0), AccessibleName = "Connection status: Disconnected" };
         // Status bar along the bottom, with a sunken pane; no sizing grip since the size is locked.
-        lblDelay = new ToolStripStatusLabel("Delay: -") { Spring = true, TextAlign = ContentAlignment.MiddleLeft, BorderSides = ToolStripStatusLabelBorderSides.All, BorderStyle = Border3DStyle.SunkenOuter };
+        lblDelay = new ToolStripStatusLabel("Delay: -") { Spring = false, TextAlign = ContentAlignment.MiddleLeft, BorderSides = ToolStripStatusLabelBorderSides.All, BorderStyle = Border3DStyle.SunkenOuter };
         var statusBar = new StatusStrip { RenderMode = ToolStripRenderMode.System, BackColor = Palette.Background, SizingGrip = false };
         statusBar.Items.Add(lblDelay);
+        statusBar.Items.Add(new ToolStripStatusLabel($"AetherGui {Aether.AppVersion}") { Spring = true, TextAlign = ContentAlignment.MiddleRight });
         // Tall enough to show the classic chunky blocks.
         prgConnecting = new ProgressBar
         {
@@ -164,10 +165,10 @@ partial class Form1
         Text = "Aether — Private network client";
         AutoScaleMode = AutoScaleMode.Dpi;
         BackColor = Palette.Background;
-        Size = new Size(333, 400);
+        Size = new Size(420, 600);
         FormBorderStyle = FormBorderStyle.FixedSingle; // size is locked; only Show latest activity changes the height
         MaximizeBox = false;
-        MinimumSize = new Size(320, 325); // sized for the hidden log; ShowLog grows it
+        MinimumSize = new Size(380, 420); // sized for the hidden log; ShowLog grows it
         StartPosition = FormStartPosition.CenterScreen;
         KeyPreview = true;
         // Docked controls lay out last-added first: the menu takes the top, then the shell fills the rest.

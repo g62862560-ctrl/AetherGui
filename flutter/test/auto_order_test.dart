@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:aether_gui/aether.dart';
-import 'package:aether_gui/auto_order_page.dart';
 
 void main() {
   int index(String name) => Aether.presets.indexWhere((p) => p.name == name);
@@ -35,26 +34,40 @@ void main() {
     await expectLater(attempt.delay(1000), throwsA(isA<Cancelled>()));
   });
 
-  test('WireGuard is first in the fresh default Auto order', () {
+  test('preferred Psiphon routes are first in the fresh default Auto order', () {
+    const preferred = [
+      'MASQUE HTTP/2 → Psiphon',
+      'MASQUE-in-MASQUE → Psiphon',
+      'WARP-in-WARP → Psiphon',
+    ];
     for (var run = 0; run < 20; run++) {
-      expect(Aether.autoOrder({}).first.name, 'WireGuard');
+      expect(Aether.autoOrder({}).take(3).map((p) => p.name), preferred);
     }
-    final failed = {index('WireGuard'): -1};
-    expect(Aether.autoOrder(failed).first.name, isNot('WireGuard'));
+    final failed = {index('MASQUE HTTP/2 → Psiphon'): -1};
+    expect(Aether.autoOrder(failed).take(3).map((p) => p.name), preferred);
   });
 
-  test('Auto tries the fastest past connect first and failed ones last', () {
+  test('preferred routes come first, then fastest; failed non-preferred last', () {
     final past = {
       index('WireGuard'): 9000,
       index('MASQUE'): 3000,
       index('MASQUE-in-MASQUE'): -1,
     };
+    const preferred = [
+      'MASQUE HTTP/2 → Psiphon',
+      'MASQUE-in-MASQUE → Psiphon',
+      'WARP-in-WARP → Psiphon',
+    ];
     for (var run = 0; run < 20; run++) {
       final order = Aether.autoOrder(past).map((p) => p.name).toList();
-      expect(order.take(2), ['MASQUE', 'WireGuard']);
-      expect(order.last, 'MASQUE-in-MASQUE');
+      expect(order.take(3), preferred);
+      expect(order.indexOf('MASQUE'), lessThan(order.indexOf('WireGuard')));
       expect(order.length, Aether.presets.where((p) => !p.manualOnly).length);
     }
+    expect(
+      Aether.autoOrder({index('WireGuard'): -1}).last.name,
+      'WireGuard',
+    );
   });
 
   test('a saved order is used as is; junk dropped', () {
@@ -73,18 +86,6 @@ void main() {
     expect(Aether.rerank([w, t, m], {...past, m: 2000}, m), [m, w, t]);
     expect(Aether.rerank([w, t, m], {...past, w: -1}, w), [t, m, w]);
     expect(Aether.rerank([w, t, m], past, index('MASQUE HTTP/2')), [w, t, m]);
-  });
-
-  test('arrows move every checked protocol together', () {
-    // 0 1* 2 3* 4  -up->  1* 0 3* 2 4  -up->  1* 3* 0 2 4  -down x2->  0 2 1* 3* 4
-    final items = [0, 1, 2, 3, 4], on = {1, 3};
-    moveChecked(items, on, -1);
-    expect(items, [1, 0, 3, 2, 4]);
-    moveChecked(items, on, -1);
-    expect(items, [1, 3, 0, 2, 4]);
-    moveChecked(items, on, 1);
-    moveChecked(items, on, 1);
-    expect(items, [0, 2, 1, 3, 4]);
   });
 
   test('connect times round-trip and junk is dropped', () {

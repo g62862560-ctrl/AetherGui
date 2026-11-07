@@ -1,6 +1,8 @@
 package com.aether.aether_gui
 
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.net.VpnService
 import android.provider.Settings
@@ -9,16 +11,24 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
-    private var pending: Pair<Int, MethodChannel.Result>? = null // vpnStart waiting for the user's VPN consent
+    private var pending: Pair<Int, MethodChannel.Result>? = null
 
-    // Dart needs where aether lives (nativeLibraryDir) and a writable dir for its identity files.
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "aether").setMethodCallHandler { call, result ->
             when (call.method) {
                 "dirs" -> result.success(listOf(applicationInfo.nativeLibraryDir, filesDir.path))
                 "appVersion" -> result.success(packageManager.getPackageInfo(packageName, 0).versionName)
-                // Kill switch lives in Android: Always-on VPN + Block connections without VPN.
+                "vpnActive" -> {
+                    try {
+                        val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+                        val network = cm.activeNetwork
+                        val caps = network?.let { cm.getNetworkCapabilities(it) }
+                        result.success(caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true)
+                    } catch (e: Exception) {
+                        result.success(false)
+                    }
+                }
                 "vpnSettings" -> {
                     startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
                     result.success(null)

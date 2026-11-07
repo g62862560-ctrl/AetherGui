@@ -8,8 +8,14 @@ sealed class CoreSettingsForm : Form
     private readonly NumericUpDown _timeout = new() { Minimum = 30, Maximum = 3600, Width = 120 };
     private readonly NumericUpDown _port = new() { Minimum = 1024, Maximum = 65535, Width = 100, Value = Aether.ProxyPort, AccessibleName = "Proxy port (HTTP and SOCKS5)" };
     private readonly ComboBox _testUrl = new() { DropDownStyle = ComboBoxStyle.DropDown, Width = 420, Text = Aether.TestUrl, AccessibleName = "Delay test URL" };
+    private readonly CheckBox _realDelayTest = new() { Text = "Verify connection and measure delay with a real web request", AutoSize = true, Checked = Aether.RealDelayTest, AccessibleName = "Real delay test" };
     private readonly IReadOnlyDictionary<int, int> _connectMs;
-    private readonly CheckedListBox _order = new() { Dock = DockStyle.Fill, CheckOnClick = true, IntegralHeight = false, DisplayMember = nameof(Preset.Label), AccessibleName = "Auto protocol order" };
+    private readonly CheckedListBox _order = new() { Dock = DockStyle.Fill, CheckOnClick = true, IntegralHeight = false, DisplayMember = nameof(Preset.Label), AccessibleName = "Auto protocol order", AllowDrop = true };
+    private readonly int[] _menuOrder;
+    private int[] _checkedOrder = [];
+    public int[] MenuOrder { get; private set; } = [];
+    private int _dragIndex = -1;
+    private Point _dragStart;
     private readonly CancellationTokenSource _helpCancellation = new(TimeSpan.FromSeconds(10));
 
     private static TextBox Editor() => new()
@@ -18,10 +24,14 @@ sealed class CoreSettingsForm : Form
         WordWrap = false, Dock = DockStyle.Fill, Font = new Font("Courier New", 9F)
     };
 
-    public CoreSettingsForm(CoreOptions options, IReadOnlyDictionary<int, int>? connectMs = null)
+    public CoreSettingsForm(CoreOptions options, IReadOnlyDictionary<int, int>? connectMs = null, int[]? menuOrder = null)
     {
         Options = options;
         _connectMs = connectMs ?? new Dictionary<int, int>();
+        _checkedOrder = Aether.SavedOrder is { Length: > 0 } saved
+            ? saved : Aether.AutoOrder(_connectMs).Select(p => Array.IndexOf(Aether.Presets, p)).ToArray();
+        _menuOrder = menuOrder is { Length: > 0 } order ? order : Aether.MenuPresetIndexes;
+        MenuOrder = _menuOrder;
         Text = "Core settings";
         // Same normal Windows look as the main window.
         Font = new Font("Segoe UI", 9F);
@@ -68,6 +78,9 @@ sealed class CoreSettingsForm : Form
         var portRow = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
         portRow.Controls.AddRange([new Label { Text = "Proxy port (HTTP + SOCKS5)", AutoSize = true }, _port]);
         Add(portRow);
+        _realDelayTest.CheckedChanged += (_, _) => _testUrl.Enabled = _realDelayTest.Checked;
+        _testUrl.Enabled = _realDelayTest.Checked;
+        Add(_realDelayTest);
         _testUrl.Items.AddRange(Aether.TestUrlSuggestions); // editable: pick one or type your own
         var urlRow = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
         urlRow.Controls.AddRange([new Label { Text = "Delay test URL", AutoSize = true }, _testUrl]);
@@ -81,7 +94,7 @@ sealed class CoreSettingsForm : Form
         reset.Click += (_, _) =>
         {
             _arguments.Text = "[]"; _environment.Text = "{}"; _timeout.Value = 300;
-            _port.Value = Aether.DefaultProxyPort; _testUrl.Text = Aether.DefaultTestUrl; FillOrder(null);
+            _port.Value = Aether.DefaultProxyPort; _realDelayTest.Checked = true; _testUrl.Text = Aether.DefaultTestUrl; ResetOrder();
         };
         buttons.Controls.AddRange([save, reset, cancel]);
         settings.Controls.Add(layout); tabs.TabPages.AddRange([settings, orderTab, helpTab]); Controls.AddRange([tabs, buttons]);
@@ -102,14 +115,17 @@ sealed class CoreSettingsForm : Form
     // The app keeps this order current after each connect; the user may move or uncheck any of them.
     private TableLayoutPanel OrderLayout()
     {
-        FillOrder(Aether.SavedOrder);
-        var moves = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true };
+        FillOrder(_menuOrder);
+        _order.MouseDown += OrderMouseDown;
+        _order.MouseMove += OrderMouseMove;
+        _order.DragEnter += (_, e) => e.Effect = e.Data?.GetDataPresent(typeof(int)) == true ? DragDropEffects.Move : DragDropEffects.None;
+        _order.DragOver += (_, e) => e.Effect = e.Data?.GetDataPresent(typeof(int)) == true ? DragDropEffects.Move : DragDropEffects.None;
+        _order.DragDrop += OrderDragDrop;
         var resetOrder = new Button { Text = "Reset order", AutoSize = true, AccessibleName = "Reset Auto order to the speed ranking" };
-        resetOrder.Click += (_, _) => FillOrder(null);
-        moves.Controls.AddRange([MoveButton("Up", -1), MoveButton("Down", 1), resetOrder]);
+        resetOrder.Click += (_, _) => ResetOrder();
         var note = new Label { AutoSize = true, Dock = DockStyle.Fill, Text =
             "Auto tries the checked protocols from the top. After each try the app moves that protocol by its speed " +
-            "(to the bottom if it failed); your own moves stay otherwise. Up/Down move all checked protocols one step. " +
+            "(to the bottom if it failed); your own moves stay otherwise. Drag a protocol to reorder. " +
             "Reset order restores the speed ranking (only this list); then Save." };
 
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2 };
@@ -118,51 +134,69 @@ sealed class CoreSettingsForm : Form
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layout.Controls.Add(note, 0, 0); layout.SetColumnSpan(note, 2);
-        layout.Controls.Add(_order, 0, 1); layout.Controls.Add(moves, 1, 1);
+        layout.Controls.Add(_order, 0, 1); layout.Controls.Add(resetOrder, 1, 1);
         return layout;
     }
 
-    // saved null or empty = the speed ranking of the default Auto protocols.
-    private void FillOrder(int[]? saved)
+    private void OrderMouseDown(object? sender, MouseEventArgs e)
     {
-        var first = Aether.AutoOrder(_connectMs, saved).Select(p => Array.IndexOf(Aether.Presets, p)).ToArray();
+        _dragIndex = _order.IndexFromPoint(e.Location);
+        _dragStart = e.Location;
+    }
+
+    private void OrderMouseMove(object? sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left || _dragIndex < 0 ||
+            (Math.Abs(e.X - _dragStart.X) < 5 && Math.Abs(e.Y - _dragStart.Y) < 5)) return;
+        var index = _dragIndex;
+        _dragIndex = -1;
+        if (index < _order.Items.Count) _order.DoDragDrop(index, DragDropEffects.Move);
+    }
+
+    private void OrderDragDrop(object? sender, DragEventArgs e)
+    {
+        if (e.Data?.GetData(typeof(int)) is not int from) return;
+        var to = _order.IndexFromPoint(_order.PointToClient(new Point(e.X, e.Y)));
+        if (to < 0) to = _order.Items.Count - 1;
+        if (to == from) return;
+        var item = _order.Items[from];
+        var on = _order.GetItemChecked(from);
+        _order.Items.RemoveAt(from);
+        _order.Items.Insert(to, item);
+        _order.SetItemChecked(to, on);
+        _order.SelectedIndex = to;
+    }
+
+    private void ResetOrder()
+    {
+        _checkedOrder = Aether.AutoOrder(_connectMs).Select(p => Array.IndexOf(Aether.Presets, p)).ToArray();
+        FillOrder([.. _checkedOrder, .. Aether.MenuPresetIndexes.Except(_checkedOrder)]);
+    }
+
+    private void FillOrder(int[] fullOrder)
+    {
+        var checkedSet = _checkedOrder.ToHashSet();
         _order.Items.Clear();
-        foreach (var i in first) _order.Items.Add(Aether.Presets[i], true);
-        foreach (var i in Aether.MenuPresetIndexes.Except(first)) _order.Items.Add(Aether.Presets[i], false);
-    }
-
-    private Button MoveButton(string text, int delta)
-    {
-        var button = new Button { Text = text, AutoSize = true, AccessibleName = $"Move checked protocols {text.ToLower()}" };
-        button.Click += (_, _) => MoveChecked(_order, delta);
-        return button;
-    }
-
-    // Every checked item steps one place up (-1) or down (+1) past an unchecked neighbour; checked ones keep their own order.
-    public static void MoveChecked(CheckedListBox list, int delta)
-    {
-        int n = list.Items.Count;
-        for (int k = 0; k < n; k++)
-        {
-            int i = delta < 0 ? k : n - 1 - k, j = i + delta;
-            if (j < 0 || j >= n || !list.GetItemChecked(i) || list.GetItemChecked(j)) continue;
-            var item = list.Items[i];
-            list.Items.RemoveAt(i); list.Items.Insert(j, item);
-            list.SetItemChecked(j, true);
-        }
+        foreach (var i in fullOrder)
+            if (i >= 0 && i < Aether.Presets.Length && !_order.Items.Cast<Preset>().Any(p => p == Aether.Presets[i]))
+                _order.Items.Add(Aether.Presets[i], checkedSet.Contains(i));
+        foreach (var i in Aether.MenuPresetIndexes.Except(fullOrder))
+            _order.Items.Add(Aether.Presets[i], checkedSet.Contains(i));
     }
 
     private void SaveOptions()
     {
         var port = (int)_port.Value;
         if (Aether.ValidPort(port) is string error) { MessageBox.Show(this, error, Text); return; }
-        if (Aether.ValidTestUrl(_testUrl.Text) is string urlError) { MessageBox.Show(this, urlError, Text); return; }
+        if (_realDelayTest.Checked && Aether.ValidTestUrl(_testUrl.Text) is string urlError) { MessageBox.Show(this, urlError, Text); return; }
         var order = _order.CheckedItems.Cast<Preset>().Select(p => Array.IndexOf(Aether.Presets, p)).ToArray();
         if (order.Length == 0) { MessageBox.Show(this, "Check at least one protocol for Auto.", Text); return; }
+        MenuOrder = _order.Items.Cast<Preset>().Select(p => Array.IndexOf(Aether.Presets, p)).ToArray();
+        _checkedOrder = order;
         try
         {
             var options = CoreOptions.Parse(_arguments.Text, _environment.Text, (int)_timeout.Value);
-            options.Save(); Aether.ProxyPort = port; Aether.TestUrl = _testUrl.Text.Trim(); Aether.SavedOrder = order; Options = options; DialogResult = DialogResult.OK; Close();
+            options.Save(); Aether.ProxyPort = port; Aether.RealDelayTest = _realDelayTest.Checked; Aether.TestUrl = _testUrl.Text.Trim(); Aether.SavedOrder = order; Options = options; DialogResult = DialogResult.OK; Close();
         }
         catch (Exception ex) when (ex is System.Text.Json.JsonException or FormatException)
         { MessageBox.Show(this, "Invalid JSON/settings. Use string arrays and string environment values; do not override managed protocols or ports.", Text); }
