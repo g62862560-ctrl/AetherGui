@@ -238,6 +238,7 @@ class Aether {
       return false;
     }
   }
+
   static Future<void> vpnSettings() => _ch.invokeMethod('vpnSettings');
 
   // "v1.2.0" or "1.2.0+3" -> [1, 2, 0]; null if it is not a version.
@@ -387,6 +388,24 @@ class Aether {
     );
   }
 
+  // The foreground service keeps the app process alive after its screen is destroyed, but dispose() may not run,
+  // so the previous core lives on holding the ports ("port in use" with no other app involved). True if one was killed.
+  // shortcut: kills only aether itself, not the tor/psiphon helpers it spawned; they exit when their parent link closes.
+  static bool killStale() {
+    try {
+      final pid = int.parse(File('$dir/core.pid').readAsStringSync().trim());
+      // The pid may have been reused by another process since: only kill what really is our core.
+      if (!File(
+        '/proc/$pid/cmdline',
+      ).readAsStringSync().contains('libaether')) {
+        return false;
+      }
+      return Process.killPid(pid, ProcessSignal.sigkill);
+    } catch (_) {
+      return false;
+    }
+  }
+
   static Future<bool> portFree(int port) async {
     try {
       await (await ServerSocket.bind('127.0.0.1', port)).close();
@@ -452,6 +471,7 @@ class Aether {
           }
         }, onError: (_) => log('Core output stream failed.'));
       }
+      File('$dir/core.pid').writeAsStringSync('${proc.pid}');
       return AetherProcess(proc);
     } catch (_) {
       // ProcessException can include arguments containing access tokens.

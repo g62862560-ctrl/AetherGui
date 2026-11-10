@@ -171,6 +171,8 @@ class _HomePageState extends State<HomePage> {
     _socksPortText.text = '${Aether.socksPort}';
     _testUrlText.text = Aether.testUrl;
     _trySecondsText.text = '$_trySeconds';
+    // A core left running by a previous screen: the app shows Disconnected, so end its VPN too.
+    if (Aether.killStale()) Aether.vpnStop();
     _saveSettings(); // persist the one-time Auto-order migration and defaults
     _checkUpdates(interactive: false);
     _loadVersion();
@@ -351,6 +353,7 @@ class _HomePageState extends State<HomePage> {
     }
 
     // Let an old aether process release its ports before starting a new one.
+    Aether.killStale();
     for (var i = 0; i < 25; i++) {
       if (await Aether.portFree(Aether.socksPort) &&
           await Aether.portFree(Aether.httpPort)) {
@@ -396,7 +399,8 @@ class _HomePageState extends State<HomePage> {
       _step,
       realDelayTest,
     );
-    if (portConflict) return _killProcessAndWait(); // says nothing about this preset
+    if (portConflict)
+      return _killProcessAndWait(); // says nothing about this preset
     _connectMs[Aether.presets.indexOf(p)] = connected
         ? took.elapsedMilliseconds
         : -1;
@@ -917,17 +921,17 @@ class _HomePageState extends State<HomePage> {
                   ],
                   if (!_vpn) ...[_proxyCard(), const SizedBox(height: 8)],
                   _quickSettings(),
-                   if (_appVersion != null) ...[
-                     const SizedBox(height: 8),
-                     Text(
-                       'Aether $_appVersion',
-                       textAlign: TextAlign.center,
-                       style: const TextStyle(
-                         color: Palette.secondaryText,
-                         fontSize: 12,
-                       ),
-                     ),
-                   ],
+                  if (_appVersion != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Aether $_appVersion',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Palette.secondaryText,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -1030,14 +1034,16 @@ class _HomePageState extends State<HomePage> {
     final result = await showModalBottomSheet<ProtocolOrderResult>(
       context: context,
       isScrollControlled: true,
-      builder: (_) =>
-          ProtocolOrderSheet(order: _menuOrder, selected: _preset),
+      builder: (_) => ProtocolOrderSheet(order: _menuOrder, selected: _preset),
     );
     if (!mounted || result == null) return;
     setState(() {
       _menuOrder = [...result.order];
       final checked = _order.toSet();
-      _order = [for (final i in _menuOrder) if (checked.contains(i)) i];
+      _order = [
+        for (final i in _menuOrder)
+          if (checked.contains(i)) i,
+      ];
       _preset = result.selected;
     });
     _saveSettings();
