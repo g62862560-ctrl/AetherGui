@@ -4,6 +4,80 @@ import 'aether.dart';
 
 typedef AutoOrderResult = ({List<int> order, List<int> checked});
 
+String _ago(int epochSeconds) {
+  final s = DateTime.now().millisecondsSinceEpoch ~/ 1000 - epochSeconds;
+  if (s < 3600) return s < 60 ? 'just now' : '${s ~/ 60}m ago';
+  if (s < 86400) return '${s ~/ 3600}h ago';
+  return '${s ~/ 86400}d ago';
+}
+
+// Verdict first (the answer), then the numbers behind it; used in this list and on Home once connected.
+Widget protocolStatLine(ProtocolStat st, {double fontSize = 12}) {
+  final (verdict, color) = switch (st.verdict) {
+    'good' => ('Works for you', const Color(0xFF4ADE80)),
+    'bad' => ('Often fails', const Color(0xFFF87171)),
+    'maybe' => ('Too few tries', const Color(0xFFFBBF24)),
+    _ => ('Not tried yet', Colors.grey),
+  };
+  const green = Color(0xFF4ADE80),
+      red = Color(0xFFF87171),
+      amber = Color(0xFFFBBF24),
+      muted = Color(0xFFA9A4B8);
+  // Each number carries its own meaning color: ok green, failures red, success rate and speed by thresholds.
+  TextSpan part(String text, Color c) => TextSpan(
+    text: text,
+    style: TextStyle(color: c, fontWeight: FontWeight.w600),
+  );
+  const dot = TextSpan(
+    text: ' · ',
+    style: TextStyle(color: muted),
+  );
+  final rate = st.tries == 0 ? 0 : st.ok * 100 ~/ st.tries;
+  final avg = st.avgMs / 1000;
+  return Text.rich(
+    TextSpan(
+      children: [
+        TextSpan(
+          text: verdict,
+          style: TextStyle(color: color, fontWeight: FontWeight.w600),
+        ),
+        if (st.tries > 0) ...[
+          const TextSpan(text: '\n'),
+          part('${st.ok} ok', st.ok > 0 ? green : muted),
+          dot,
+          part('${st.fail} failed', st.fail > 0 ? red : muted),
+          dot,
+          part(
+            '$rate% success',
+            rate >= 60
+                ? green
+                : rate >= 30
+                ? amber
+                : red,
+          ),
+          if (st.ok > 0) ...[
+            dot,
+            part(
+              'avg ${avg.toStringAsFixed(1)}s',
+              avg < 5
+                  ? green
+                  : avg < 15
+                  ? amber
+                  : red,
+            ),
+          ],
+          if (st.lastOk > 0)
+            TextSpan(
+              text: ' · last ok ${_ago(st.lastOk)}',
+              style: const TextStyle(color: muted),
+            ),
+        ],
+      ],
+    ),
+    style: TextStyle(fontSize: fontSize),
+  );
+}
+
 // Which protocols Auto tries, top first. The app keeps this order current after each connect;
 // the user may drag or uncheck any of them. Pops the full list order and checked indexes on Save.
 class AutoOrderPage extends StatefulWidget {
@@ -66,40 +140,6 @@ class _AutoOrderPageState extends State<AutoOrderPage> {
     Navigator.pop(context, (order: _items, checked: checked));
   }
 
-  static String _ago(int epochSeconds) {
-    final s = DateTime.now().millisecondsSinceEpoch ~/ 1000 - epochSeconds;
-    if (s < 3600) return '${(s ~/ 60).clamp(1, 59)}m ago';
-    if (s < 86400) return '${s ~/ 3600}h ago';
-    return '${s ~/ 86400}d ago';
-  }
-
-  // Verdict first (the answer), then the numbers behind it.
-  Widget _statLine(ProtocolStat st) {
-    final (verdict, color) = switch (st.verdict) {
-      'good' => ('Works for you', const Color(0xFF4ADE80)),
-      'bad' => ('Often fails', const Color(0xFFF87171)),
-      'maybe' => ('Too few tries', const Color(0xFFFBBF24)),
-      _ => ('Not tried yet', Colors.grey),
-    };
-    final details = st.tries == 0
-        ? ''
-        : '${st.ok} ok · ${st.fail} failed'
-              '${st.ok > 0 ? ' · avg ${(st.avgMs / 1000).toStringAsFixed(1)}s' : ''}'
-              '${st.lastOk > 0 ? ' · last ok ${_ago(st.lastOk)}' : ''}';
-    return Text.rich(
-      TextSpan(
-        children: [
-          TextSpan(
-            text: verdict,
-            style: TextStyle(color: color, fontWeight: FontWeight.w600),
-          ),
-          if (details.isNotEmpty) TextSpan(text: '\n$details'),
-        ],
-      ),
-      style: const TextStyle(fontSize: 12),
-    );
-  }
-
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
@@ -117,8 +157,9 @@ class _AutoOrderPageState extends State<AutoOrderPage> {
         const Padding(
           padding: EdgeInsets.fromLTRB(24, 8, 24, 8),
           child: Text(
-            'Auto tries the checked protocols from the top. After each try the app moves that '
-            'protocol by its speed (to the bottom if it failed); your own moves stay otherwise. '
+            'Auto tries the checked protocols from the top. After each try the app puts the '
+            'protocols that worked on top (best success rate, then fastest) and the ones that only '
+            'failed at the bottom; your own moves stay otherwise. '
             'Drag the handle to reorder. Reset restores the speed ranking.',
             style: TextStyle(fontSize: 13),
           ),
@@ -135,7 +176,7 @@ class _AutoOrderPageState extends State<AutoOrderPage> {
                   key: ValueKey(i),
                   controlAffinity: ListTileControlAffinity.leading,
                   title: Text(Aether.presets[i].label),
-                  subtitle: _statLine(widget.stats[i] ?? ProtocolStat()),
+                  subtitle: protocolStatLine(widget.stats[i] ?? ProtocolStat()),
                   value: _on.contains(i),
                   onChanged: (v) =>
                       setState(() => v == true ? _on.add(i) : _on.remove(i)),

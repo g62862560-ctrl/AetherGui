@@ -35,6 +35,39 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('protocol can be selected on Home and is saved', (tester) async {
+    final dir = Directory.systemTemp.createTempSync('aether-protocol-');
+    Aether.dir = dir.path;
+    Aether.exe = '${dir.path}/missing-core';
+    addTearDown(() => dir.deleteSync(recursive: true));
+    await tester.pumpWidget(
+      MaterialApp(theme: Palette.theme, home: const HomePage()),
+    );
+    await tester.pumpAndSettle();
+
+    final wireGuard = Aether.presets.indexWhere((p) => p.name == 'WireGuard');
+    await tester.tap(find.byKey(const Key('connectionProtocol')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('WireGuard').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Done'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('connectionProtocol')),
+        matching: find.text('WireGuard'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      File('${dir.path}/settings.txt').readAsStringSync(),
+      contains('Preset=$wireGuard'),
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('Auto try seconds are saved only in range', (tester) async {
     final dir = Directory.systemTemp.createTempSync('aether-try-seconds-');
     Aether.dir = dir.path;
@@ -96,7 +129,7 @@ void main() {
       expect(find.text('Auto - fastest route'), findsOneWidget);
       expect(find.text('You are not protected'), findsNothing);
       expect(find.byKey(const Key('resetOrderConnect')), findsOneWidget);
-      expect(find.byKey(const Key('connectionProtocol')), findsNothing);
+      expect(find.byKey(const Key('connectionProtocol')), findsOneWidget);
       expect(find.text('Waiting for logs...'), findsNothing);
       expect(tester.takeException(), isNull);
 

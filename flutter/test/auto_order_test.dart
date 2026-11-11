@@ -112,5 +112,14 @@ void statsTests() {
     expect(stats[1]!.verdict, 'bad');
     expect(ProtocolStat().verdict, 'new');
     expect(ProtocolStat(ok: 1).verdict, 'maybe');
+    final sorted = Aether.sortByStats(
+      [1, 2, 3, 0],
+      {
+        0: ProtocolStat(ok: 5, fail: 1, totalMs: 9000),
+        1: ProtocolStat(fail: 3),
+        3: ProtocolStat(ok: 1, totalMs: 4000),
+      },
+    );
+    expect(sorted, [3, 0, 2, 1]); // 100% beats 83%, untried middle, failed last
   });
 }

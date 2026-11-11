@@ -12,7 +12,17 @@ sealed class CoreSettingsForm : Form
     private readonly IReadOnlyDictionary<int, int> _connectMs;
     private readonly IReadOnlyDictionary<int, ProtocolStat> _stats;
     // Drawn by hand so each row can show how the protocol did next to its name.
-    private readonly CheckedListBox _order = new() { Dock = DockStyle.Fill, CheckOnClick = true, IntegralHeight = false, DisplayMember = nameof(Preset.Label), AccessibleName = "Auto protocol order", AllowDrop = true, DrawMode = DrawMode.OwnerDrawFixed };
+    private readonly StatsListBox _order = new() { Dock = DockStyle.Fill, CheckOnClick = true, IntegralHeight = false, DisplayMember = nameof(Preset.Label), AccessibleName = "Auto protocol order", AllowDrop = true };
+
+    // CheckedListBox ignores DrawMode and never raises DrawItem; overriding OnDrawItem is the only hook.
+    internal sealed class StatsListBox : CheckedListBox
+    {
+        public Action<DrawItemEventArgs>? Draw;
+        protected override void OnDrawItem(DrawItemEventArgs e)
+        {
+            if (Draw is null) base.OnDrawItem(e); else Draw(e);
+        }
+    }
     private readonly int[] _menuOrder;
     private int[] _checkedOrder = [];
     public int[] MenuOrder { get; private set; } = [];
@@ -119,8 +129,7 @@ sealed class CoreSettingsForm : Form
     private TableLayoutPanel OrderLayout()
     {
         FillOrder(_menuOrder);
-        _order.ItemHeight = Font.Height + 8;
-        _order.DrawItem += DrawOrderItem;
+        _order.Draw = DrawOrderItem;
         _order.MouseDown += OrderMouseDown;
         _order.MouseMove += OrderMouseMove;
         _order.DragEnter += (_, e) => e.Effect = e.Data?.GetDataPresent(typeof(int)) == true ? DragDropEffects.Move : DragDropEffects.None;
@@ -129,8 +138,8 @@ sealed class CoreSettingsForm : Form
         var resetOrder = new Button { Text = "Reset order", AutoSize = true, AccessibleName = "Reset Auto order to the speed ranking" };
         resetOrder.Click += (_, _) => ResetOrder();
         var note = new Label { AutoSize = true, Dock = DockStyle.Fill, Text =
-            "Auto tries the checked protocols from the top. After each try the app moves that protocol by its speed " +
-            "(to the bottom if it failed); your own moves stay otherwise. Drag a protocol to reorder. " +
+            "Auto tries the checked protocols from the top. After each try the app puts the protocols that worked on top " +
+            "(best success rate, then fastest) and the ones that only failed at the bottom; your own moves stay otherwise. Drag a protocol to reorder. " +
             "Reset order restores the speed ranking (only this list); then Save. " +
             "Each row shows how the protocol did on this device: successful connects, failures, average connect time and when it last worked." };
 
@@ -147,11 +156,34 @@ sealed class CoreSettingsForm : Form
     internal static string Ago(long epochSeconds)
     {
         var s = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - epochSeconds;
-        return s < 3600 ? $"{Math.Max(1, s / 60)}m ago" : s < 86400 ? $"{s / 3600}h ago" : $"{s / 86400}d ago";
+        return s < 60 ? "just now" : s < 3600 ? $"{s / 60}m ago" : s < 86400 ? $"{s / 3600}h ago" : $"{s / 86400}d ago";
     }
 
+    // Each number in its own meaning color: ok green, failures red, success rate and speed by thresholds.
+    internal static List<(string Text, Color Color)> StatParts(ProtocolStat st)
+    {
+        List<(string, Color)> parts = [];
+        if (st.Tries == 0) return parts;
+        var rate = st.Ok * 100 / st.Tries;
+        parts.Add(($"{st.Ok} ok", st.Ok > 0 ? Palette.Connected : Palette.MutedText));
+        parts.Add(($"{st.Fail} failed", st.Fail > 0 ? Palette.Disconnected : Palette.MutedText));
+        parts.Add(($"{rate}% success", rate >= 60 ? Palette.Connected : rate >= 30 ? Palette.Connecting : Palette.Disconnected));
+        if (st.Ok > 0) parts.Add(($"avg {st.AvgMs / 1000.0:0.0}s", st.AvgMs < 5000 ? Palette.Connected : st.AvgMs < 15000 ? Palette.Connecting : Palette.Disconnected));
+        if (st.LastOk > 0) parts.Add(($"last ok {Ago(st.LastOk)}", Palette.MutedText));
+        return parts;
+    }
+
+    // The answer in words and color; shared with the main window's connected line.
+    internal static (string Text, Color Color) Verdict(ProtocolStat st) => st.Verdict switch
+    {
+        "good" => ("Works for you", Palette.Connected),
+        "bad" => ("Often fails", Palette.Disconnected),
+        "maybe" => ("Too few tries", Palette.Connecting),
+        _ => ("Not tried yet", Palette.MutedText)
+    };
+
     // Name, then the verdict (the answer) in color, then the numbers behind it.
-    private void DrawOrderItem(object? sender, DrawItemEventArgs e)
+    internal void DrawOrderItem(DrawItemEventArgs e)
     {
         e.DrawBackground();
         if (e.Index < 0) return;
@@ -161,20 +193,20 @@ sealed class CoreSettingsForm : Form
         var glyph = CheckBoxRenderer.GetGlyphSize(e.Graphics, state);
         CheckBoxRenderer.DrawCheckBox(e.Graphics, new Point(e.Bounds.X + 2, e.Bounds.Y + (e.Bounds.Height - glyph.Height) / 2), state);
         var selected = (e.State & DrawItemState.Selected) != 0;
-        var (verdict, color) = st.Verdict switch
-        {
-            "good" => ("Works for you", Palette.Connected),
-            "bad" => ("Often fails", Palette.Disconnected),
-            "maybe" => ("Too few tries", Palette.Connecting),
-            _ => ("Not tried yet", Palette.MutedText)
-        };
-        var details = st.Tries == 0 ? "" : $"{st.Ok} ok · {st.Fail} failed"
-            + (st.Ok > 0 ? $" · avg {st.AvgMs / 1000.0:0.0}s" : "") + (st.LastOk > 0 ? $" · last ok {Ago(st.LastOk)}" : "");
+        var (verdict, color) = Verdict(st);
         const TextFormatFlags flags = TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
-        int x = e.Bounds.X + glyph.Width + 8, nameWidth = Math.Max(140, e.Bounds.Width * 2 / 5), verdictWidth = TextRenderer.MeasureText("Too few tries ", e.Font).Width;
+        int x = e.Bounds.X + glyph.Width + 8, nameWidth = Math.Max(140, e.Bounds.Width * 2 / 5), verdictWidth = TextRenderer.MeasureText("Works for you  ", e.Font).Width; // the longest verdict
         TextRenderer.DrawText(e.Graphics, preset.Label, e.Font, new Rectangle(x, e.Bounds.Y, nameWidth, e.Bounds.Height), e.ForeColor, flags);
         TextRenderer.DrawText(e.Graphics, verdict, e.Font, new Rectangle(x + nameWidth, e.Bounds.Y, verdictWidth, e.Bounds.Height), selected ? e.ForeColor : color, flags);
-        TextRenderer.DrawText(e.Graphics, details, e.Font, Rectangle.FromLTRB(x + nameWidth + verdictWidth, e.Bounds.Top, e.Bounds.Right, e.Bounds.Bottom), selected ? e.ForeColor : Palette.MutedText, flags);
+        // Numbers are drawn piece by piece so each gets its own color (the selection color overrides them for contrast).
+        var px = x + nameWidth + verdictWidth;
+        foreach (var (text, partColor) in StatParts(st).SelectMany((p, i) => i == 0 ? new[] { p } : new[] { (" · ", Palette.MutedText), p }))
+        {
+            var width = TextRenderer.MeasureText(e.Graphics, text, e.Font, new Size(int.MaxValue, e.Bounds.Height), TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Width;
+            if (px + width > e.Bounds.Right) break;
+            TextRenderer.DrawText(e.Graphics, text, e.Font, new Rectangle(px, e.Bounds.Y, width, e.Bounds.Height), selected ? e.ForeColor : partColor, flags | TextFormatFlags.NoPadding);
+            px += width;
+        }
         e.DrawFocusRectangle();
     }
 

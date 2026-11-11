@@ -148,6 +148,11 @@ static class Checks
         Check(stats.Count == 2 && Aether.ParseStats(Aether.FormatStats(stats))[0].AvgMs == 4200
             && stats[0].Verdict == "good" && stats[1].Verdict == "bad" && new ProtocolStat().Verdict == "new" && new ProtocolStat(1).Verdict == "maybe",
             "Protocol stats round-trip and give a verdict");
+        var parts = CoreSettingsForm.StatParts(stats[0]);
+        Check(parts[0].Color == Palette.Connected && parts[1].Color == Palette.Disconnected && parts[2].Color == Palette.Connected && parts[3].Color == Palette.Connected,
+            "Stat numbers carry meaning colors");
+        Check(Aether.SortByStats([1, 2, 3, 0], new Dictionary<int, ProtocolStat> { [0] = new(5, 1, 9000), [1] = new(0, 3), [3] = new(1, 0, 4000) })
+            .SequenceEqual([3, 0, 2, 1]), "Worked protocols lead, untried keep order, only-failed go last");
         ApplicationConfiguration.Initialize();
         // Larger text stands in for 125-200% display scaling: the left panel must grow with it, never slide under the log.
         static IEnumerable<Control> All(Control c) => c.Controls.Cast<Control>().SelectMany(x => All(x).Prepend(x));
@@ -173,7 +178,7 @@ static class Checks
         {
             using var main = new Form1();
             var next = All(main).OfType<Button>().First(b => b.AccessibleName == "Next protocol");
-            Check(!All(main).OfType<ComboBox>().Any(c => c.AccessibleName == "Connection protocol"), "The protocol list is gone from the main window");
+            Check(All(main).OfType<ComboBox>().Any(c => c.AccessibleName == "Connection protocol"), "The protocol list is on the main window");
             var seconds = All(main).OfType<NumericUpDown>().First(n => n.AccessibleName == "Auto protocol try seconds");
             Check(!next.Enabled && seconds.Minimum == 5 && seconds.Maximum == 3600
                 && seconds.Value >= seconds.Minimum && seconds.Value <= seconds.Maximum,
@@ -190,6 +195,21 @@ static class Checks
             var showLog = InForm(All(main).OfType<CheckBox>().First(c => c.Text == "Show latest activity"));
             Check(showLog.Bottom <= InForm(main.Controls.Find("connectionPanel", true)[0]).Bottom - 8, $"All controls fit while connecting ({showLog.Bottom} vs panel {InForm(main.Controls.Find("connectionPanel", true)[0]).Bottom})");
         }
+        {
+            using var main = new Form1();
+            var cards = All(main).OfType<TableLayoutPanel>().Single(t => t.AccessibleName == "Connected protocol stats");
+            Check(!cards.Visible && cards.Controls.Count == 4, "Four stat cards, hidden until connected");
+            var dir = Environment.GetEnvironmentVariable("AETHER_SHOT_DIR");
+            if (dir is not null)
+            {
+                cards.Visible = true;
+                main.Show(); Application.DoEvents();
+                using var shot = new Bitmap(main.Width, main.Height);
+                main.DrawToBitmap(shot, new Rectangle(Point.Empty, main.Size));
+                shot.Save(Path.Combine(dir, "main-cards.png"));
+                main.Close();
+            }
+        }
         Check(Form1.LogColor("Could not start the core") == Palette.Disconnected, "Errors are red in the log");
         Check(Form1.LogColor("Switching to WireGuard") == Palette.Connecting, "Route switches are amber in the log");
         Check(Form1.LogColor("Connected: MASQUE") == Palette.Connected, "Connections are green in the log");
@@ -201,6 +221,24 @@ static class Checks
             "Connecting colors start, step and wrap around smoothly");
         Check(Aether.ValidTestUrl("https://www.cloudflare.com/cdn-cgi/trace") is null && Aether.ValidTestUrl("ftp://x") is not null
             && Aether.ValidTestUrl("gstatic.com") is not null, "Delay test URL must be absolute http(s)");
+        {
+            // The Auto order list must really draw the stats: a "good" protocol shows its green verdict.
+            using var withStats = new CoreSettingsForm(new(), null, null, stats);
+            var list = All(withStats).OfType<CoreSettingsForm.StatsListBox>().Single();
+            ((TabControl)withStats.Controls[0]).SelectedIndex = 1;
+            withStats.Show();
+            Application.DoEvents();
+            using var shot = new Bitmap(list.Width, list.Height);
+            list.DrawToBitmap(shot, new Rectangle(Point.Empty, list.Size));
+            var dir = Environment.GetEnvironmentVariable("AETHER_SHOT_DIR");
+            if (dir is not null) shot.Save(Path.Combine(dir, "auto-order.png"));
+            var green = 0;
+            for (var x = 0; x < shot.Width; x++)
+                for (var y = 0; y < shot.Height; y++)
+                    if (shot.GetPixel(x, y).ToArgb() == Palette.Connected.ToArgb()) green++;
+            withStats.Close();
+            Check(green > 0, "Auto order list draws per-protocol stats");
+        }
         using var settings = new CoreSettingsForm(new());
         var delayToggle = All(settings).OfType<CheckBox>().Single(c => c.AccessibleName == "Real delay test");
         var delayUrl = All(settings).OfType<ComboBox>().Single(c => c.AccessibleName == "Delay test URL");

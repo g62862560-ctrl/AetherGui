@@ -12,6 +12,7 @@ record ProtocolStat(int Ok = 0, int Fail = 0, long TotalMs = 0, long LastOk = 0)
 {
     public int Tries => Ok + Fail;
     public long AvgMs => Ok == 0 ? 0 : TotalMs / Ok;
+    public string Summary => Tries == 0 ? "" : $"{Ok} ok · {Fail} failed · {Ok * 100 / Tries}% success" + (Ok > 0 ? $" · avg {AvgMs / 1000.0:0.0}s" : "");
 
     // Good works for you, Bad mostly fails, Maybe has too few tries, New was never tried.
     public string Verdict => Tries == 0 ? "new"
@@ -238,6 +239,15 @@ static class Aether
                 return new ProtocolStat(int.Parse(m.Groups[2].Value), int.Parse(m.Groups[3].Value),
                     long.Parse(m.Groups[4].Value), long.Parse(m.Groups[5].Value));
             });
+
+    // Worked first (best success rate, then fastest), untried next, only-failed last; ties keep their order (OrderBy is stable).
+    public static int[] SortByStats(IEnumerable<int> order, IReadOnlyDictionary<int, ProtocolStat> stats)
+    {
+        int Group(int i) => stats.GetValueOrDefault(i) is not { Tries: > 0 } s ? 1 : s.Ok > 0 ? 0 : 2;
+        return [.. order.OrderBy(Group)
+            .ThenByDescending(i => Group(i) == 0 ? stats[i].Ok / (double)stats[i].Tries : 0)
+            .ThenBy(i => Group(i) == 0 ? stats[i].AvgMs : 0)];
+    }
 
     public static string FormatStats(IReadOnlyDictionary<int, ProtocolStat> stats) =>
         string.Join(";", stats.Select(kv => $"{kv.Key}:{kv.Value.Ok}:{kv.Value.Fail}:{kv.Value.TotalMs}:{kv.Value.LastOk}"));

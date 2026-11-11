@@ -356,6 +356,31 @@ class Aether {
         ),
   };
 
+  // Worked first (best success rate, then fastest), untried next, only-failed last; ties keep their order.
+  static List<int> sortByStats(List<int> order, Map<int, ProtocolStat> stats) {
+    int group(int i) {
+      final s = stats[i];
+      if (s == null || s.tries == 0) return 1;
+      return s.ok > 0 ? 0 : 2;
+    }
+
+    final pos = {for (final (n, i) in order.indexed) i: n};
+    return [...order]..sort((a, b) {
+      final g = group(a).compareTo(group(b));
+      if (g != 0) return g;
+      if (group(a) == 0) {
+        final sa = stats[a]!, sb = stats[b]!;
+        final r = (sb.ok * sa.tries).compareTo(
+          sa.ok * sb.tries,
+        ); // higher rate first
+        if (r != 0) return r;
+        final v = sa.avgMs.compareTo(sb.avgMs);
+        if (v != 0) return v;
+      }
+      return pos[a]!.compareTo(pos[b]!);
+    });
+  }
+
   static String formatStats(Map<int, ProtocolStat> stats) => stats.entries
       .map(
         (e) =>

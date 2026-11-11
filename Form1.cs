@@ -23,6 +23,7 @@ public partial class Form1 : Form
     {
         InitializeComponent();
         cboScan.Items.AddRange(["Fast: first server that answers", "Balanced: tries a few, keeps the fastest"]);
+        var savedProtocol = 0;
         string? savedMenuText = null;
         using (var key = Registry.CurrentUser.OpenSubKey(SettingsKey))
         {
@@ -30,6 +31,7 @@ public partial class Form1 : Form
             chkSysProxy.Checked = key?.GetValue("SetSystemProxy") is 1;
             chkPsiphon.Checked = key?.GetValue("RunPsiphon") is not 0; // on unless turned off, as before this option
             chkShowLog.Checked = key?.GetValue("ShowActivity") is not 0; // on unless turned off
+            savedProtocol = key?.GetValue("Protocol") is int i && i >= 0 && i <= Aether.Presets.Length ? i : 0;
             _stats = Aether.ParseStats(key?.GetValue("Stats") as string);
             savedMenuText = key?.GetValue("MenuOrder") as string;
             cboScan.SelectedIndex = key?.GetValue("Scan") is 1 ? 1 : 0;
@@ -46,9 +48,14 @@ public partial class Form1 : Form
         var savedMenu = Aether.ParseOrder(savedMenuText);
         var menuOrder = savedMenu.Length == Aether.Presets.Length
             ? savedMenu : [.. autoOrder, .. Aether.MenuPresetIndexes.Except(autoOrder)];
-        _protocolIndexes = [-1, .. menuOrder];
+        Aether.SavedOrder = Aether.SortByStats(Aether.SavedOrder, _stats);
+        _protocolIndexes = [-1, .. Aether.SortByStats(menuOrder, _stats)];
+        cboProtocol.Items.Add("Auto (order in Core settings)");
+        cboProtocol.Items.AddRange(_protocolIndexes.Skip(1).Select(i => (object)Aether.Presets[i].Label).ToArray());
+        cboProtocol.SelectedIndex = Math.Max(0, Array.IndexOf(_protocolIndexes, savedProtocol - 1));
         try { _coreOptions = CoreOptions.Load(); }
         catch { chkStartup.Checked = false; Log("Could not load core settings. Review settings before connecting."); }
+        cboProtocol.SelectedIndexChanged += (_, _) => SaveSetting("Protocol", _protocolIndexes[cboProtocol.SelectedIndex] + 1);
         cboScan.SelectedIndexChanged += (_, _) => SaveSetting("Scan", cboScan.SelectedIndex);
         numTrySeconds.ValueChanged += (_, _) => SaveSetting("TrySeconds", (int)numTrySeconds.Value);
         chkStartup.CheckedChanged += (_, _) => SaveSetting("AutoConnect", chkStartup.Checked);
@@ -84,6 +91,21 @@ public partial class Form1 : Form
         FormClosing += (_, _) => { _buttonTimer.Dispose(); _cts?.Cancel(); KillProcess(); Psiphon.Kill(); SystemProxy.Disable(); };
     }
 
+    private static readonly Bitmap PsiphonIcon = new(typeof(Form1).Assembly.GetManifestResourceStream("psiphon.png")!);
+
+    // Psiphon presets get Psiphon's logo; every item is indented the same so the names line up.
+    private void DrawProtocolItem(object? sender, DrawItemEventArgs e)
+    {
+        e.DrawBackground();
+        if (e.Index < 0) return;
+        var text = cboProtocol.GetItemText(cboProtocol.Items[e.Index]) ?? "";
+        int size = e.Bounds.Height - 2, x = e.Bounds.X + 2;
+        if (text.Contains("Psiphon")) e.Graphics.DrawImage(PsiphonIcon, x, e.Bounds.Y + 1, size, size);
+        var textBounds = Rectangle.FromLTRB(x + size + 4, e.Bounds.Top, e.Bounds.Right, e.Bounds.Bottom);
+        TextRenderer.DrawText(e.Graphics, text, e.Font, textBounds, e.ForeColor, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
+        e.DrawFocusRectangle();
+    }
+
     // The log fills the empty space under the controls; showing it does not resize the window.
     private void ShowLog(bool show) => txtMiniLog.Visible = show;
 
@@ -100,19 +122,19 @@ public partial class Form1 : Form
         if (_cts != null) { _cts.Cancel(); return; }
         _cts = new CancellationTokenSource();
         StartWatchdog();
-        btnConnect.Text = "✕\nDisconnect";
+        btnConnect.Text = "■\nDisconnect";
         btnConnect.AccessibleName = "Disconnect";
-        btnCoreSettings.Enabled = btnReset.Enabled = cboScan.Enabled = numTrySeconds.Enabled = btnUpdates.Enabled = false;
+        btnCoreSettings.Enabled = btnReset.Enabled = cboProtocol.Enabled = cboScan.Enabled = numTrySeconds.Enabled = btnUpdates.Enabled = false;
         btnNextProtocol.Enabled = true;
         btnCoreInput.Enabled = true;
         await RunAsync(_cts.Token);
         _cts.Dispose();
         _cts = null;
         if (IsDisposed) return;
-        btnCoreSettings.Enabled = btnReset.Enabled = cboScan.Enabled = numTrySeconds.Enabled = btnUpdates.Enabled = true;
+        btnCoreSettings.Enabled = btnReset.Enabled = cboProtocol.Enabled = cboScan.Enabled = numTrySeconds.Enabled = btnUpdates.Enabled = true;
         btnNextProtocol.Enabled = false;
         btnCoreInput.Enabled = false;
-        btnConnect.Text = "⏻\nConnect";
+        btnConnect.Text = "▶\nConnect";
         btnConnect.AccessibleName = "Connect securely";
     }
 
@@ -124,6 +146,7 @@ public partial class Form1 : Form
         Aether.SavedOrder = [];
         var auto = Aether.AutoOrder(_connectMs).Select(p => Array.IndexOf(Aether.Presets, p)).ToArray();
         RefreshProtocolMenu([.. auto, .. Aether.MenuPresetIndexes.Except(auto)]);
+        cboProtocol.SelectedIndex = 0; // back to Auto
         SaveSetting("ConnectMs", "");
         btnConnect_Click(null, EventArgs.Empty);
     }
@@ -140,7 +163,7 @@ public partial class Form1 : Form
     private async Task RunAsync(CancellationToken ct)
     {
         var untried = new List<Preset>();
-        var chosen = -1; // always Auto now; the order is edited in Core settings > Auto order
+        var chosen = _protocolIndexes[cboProtocol.SelectedIndex]; // -1 = Auto; read once, a new pick applies on the next Connect
         var scan = ScanModes[cboScan.SelectedIndex];
         var trySeconds = (int)numTrySeconds.Value;
         try
@@ -159,7 +182,7 @@ public partial class Form1 : Form
                 try
                 {
                     if (_nextRequested) attempt.Cancel();
-                    var startupSeconds = _coreOptions.IsConfigured ? _coreOptions.StartupSeconds : chosen < 0 ? trySeconds : p.StartupSecs;
+                    var startupSeconds = _coreOptions.IsConfigured ? _coreOptions.StartupSeconds : trySeconds; // the user's limit, for a picked protocol too
                     await ConnectAndMonitorAsync(p, scan, startupSeconds, attempt.Token);
                     await Task.Delay(1000, attempt.Token);
                 }
@@ -183,6 +206,7 @@ public partial class Form1 : Form
             _nextRequested = false;
             KillProcess();
             SetStatus("Disconnected", Palette.Disconnected);
+            statCards.Visible = false;
             lblDelay.Text = "Delay: -";
             lblDelay.ForeColor = SystemColors.ControlText;
         }
@@ -210,6 +234,9 @@ public partial class Form1 : Form
         SaveSetting("Stats", Aether.FormatStats(_stats));
         var order = Aether.AutoOrder(_connectMs, Aether.SavedOrder).Select(x => Array.IndexOf(Aether.Presets, x)).ToArray();
         Aether.SavedOrder = Aether.Rerank(order, _connectMs, Array.IndexOf(Aether.Presets, p));
+        // Both lists follow the history: what worked on top, what only failed at the bottom.
+        Aether.SavedOrder = Aether.SortByStats(Aether.SavedOrder, _stats);
+        RefreshProtocolMenu(Aether.SortByStats(_protocolIndexes.Skip(1), _stats));
         if (!connected)
         {
             Log(proc.HasExited ? $"{p.Name}: process exited." : $"{p.Name}: no internet, switching.");
@@ -219,6 +246,15 @@ public partial class Form1 : Form
 
         if (chkSysProxy.Checked) SystemProxy.Enable();
         SetStatus($"Connected: {p.Name}", Palette.Connected);
+        var (verdict, verdictColor) = CoreSettingsForm.Verdict(_stats[index]);
+        var st = _stats[index];
+        var rate = st.Ok * 100 / st.Tries;
+        SetStat(statSuccess, $"{rate}%", rate >= 60 ? Palette.Connected : rate >= 30 ? Palette.Connecting : Palette.Disconnected);
+        SetStat(statAvg, $"{st.AvgMs / 1000.0:0.0}s", st.AvgMs < 5000 ? Palette.Connected : st.AvgMs < 15000 ? Palette.Connecting : Palette.Disconnected);
+        SetStat(statTries, $"{st.Ok}/{st.Tries}", Palette.Accent);
+        SetStat(statPing, "-", Palette.MutedText);
+        statCards.Visible = true;
+        Log($"{p.Name} on this device: {_stats[index].Summary}.", verdictColor);
         Log(realDelayTest
             ? $"Connected via {p.Name} in {took.Elapsed.TotalSeconds:0.0}s, delay {ms} ms."
             : $"Connected via {p.Name} in {took.Elapsed.TotalSeconds:0.0}s; local proxy ready, internet not tested.");
@@ -227,6 +263,7 @@ public partial class Form1 : Form
         if (!realDelayTest)
         {
             lblDelay.Text = "Delay: not tested";
+            SetStat(statPing, "not tested", Palette.MutedText);
             lblDelay.ForeColor = SystemColors.ControlText;
             while (!proc.HasExited) await Task.Delay(1000, ct);
         }
@@ -235,6 +272,7 @@ public partial class Form1 : Form
             for (int fails = 0; fails < 2;)
             {
                 lblDelay.Text = ms is null ? "Delay: timeout" : $"Delay: {ms} ms";
+                SetStat(statPing, ms is null ? "timeout" : $"{ms} ms", PingColor(ms));
                 lblDelay.ForeColor = PingColor(ms);
                 await Task.Delay(5000, ct);
                 if (proc.HasExited) break;
@@ -304,9 +342,15 @@ public partial class Form1 : Form
     // Keep the main list in the same order the user set in Core settings > Auto order.
     private void RefreshProtocolMenu(int[]? menuOrder = null)
     {
+        var selected = cboProtocol.SelectedIndex >= 0 && cboProtocol.SelectedIndex < _protocolIndexes.Length
+            ? _protocolIndexes[cboProtocol.SelectedIndex] : -1;
         var order = (menuOrder ?? _protocolIndexes.Skip(1).ToArray()).Where(i => i >= 0 && i < Aether.Presets.Length).Distinct().ToList();
         order.AddRange(Aether.MenuPresetIndexes.Except(order));
         _protocolIndexes = [-1, .. order];
+        cboProtocol.Items.Clear();
+        cboProtocol.Items.Add("Auto (order in Core settings)");
+        cboProtocol.Items.AddRange(_protocolIndexes.Skip(1).Select(i => (object)Aether.Presets[i].Label).ToArray());
+        cboProtocol.SelectedIndex = Math.Max(0, Array.IndexOf(_protocolIndexes, selected));
         SaveSetting("MenuOrder", string.Join(",", order));
     }
 
@@ -400,6 +444,8 @@ public partial class Form1 : Form
         Log("2. Enable 'Set system proxy' only when needed; anything with its own proxy settings can bypass it.", tip);
         Log($"3. Auto rotates the default protocols ({(int)numTrySeconds.Value}s each), or your own order from Core settings > Auto order. Psiphon may need a longer try time.", tip);
     }
+
+    private static void SetStat(Label value, string text, Color color) { value.Text = text; value.ForeColor = color; }
 
     private void SetStatus(string text, Color color)
     {

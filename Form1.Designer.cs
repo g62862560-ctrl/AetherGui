@@ -23,8 +23,12 @@ partial class Form1
     private ToolStripMenuItem btnCoreInput = null!;
     private ToolStripMenuItem btnUpdates = null!;
     private Label lblStatus = null!;
+    private TableLayoutPanel statCards = null!; // shown only while connected
+    private Label statPing = null!, statSuccess = null!, statAvg = null!, statTries = null!;
     private ToolStripStatusLabel lblDelay = null!;
     private Button btnReset = null!;
+    private Label lblProtocol = null!;
+    private ComboBox cboProtocol = null!;
     private Label lblScan = null!;
     private ComboBox cboScan = null!;
     private RichTextBox txtMiniLog = null!;
@@ -54,6 +58,19 @@ partial class Form1
         MinimumSize = new Size(0, 56), Margin = new Padding(3), UseVisualStyleBackColor = true
     };
 
+    // Small card: a muted caption over a bold value; the value label is returned so its text and color can change.
+    private static Label StatCard(TableLayoutPanel row, string caption, int column)
+    {
+        var card = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 1, Margin = new Padding(3), Padding = new Padding(4), BackColor = Palette.LogBackground };
+        card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        card.Paint += (_, e) => ControlPaint.DrawBorder3D(e.Graphics, card.ClientRectangle, Border3DStyle.Etched);
+        card.Controls.Add(new Label { Text = caption, AutoSize = true, Anchor = AnchorStyles.None, ForeColor = Palette.MutedText });
+        var value = new Label { Text = "-", AutoSize = true, Anchor = AnchorStyles.None, Font = new Font("Segoe UI", 11F, FontStyle.Bold), AccessibleName = caption };
+        card.Controls.Add(value);
+        row.Controls.Add(card, column, 0);
+        return value;
+    }
+
     // Gray panel with an etched 3D frame, named so tests can find it.
     private static Panel Card(string name)
     {
@@ -69,16 +86,20 @@ partial class Form1
         var bold = new Font("Segoe UI", 9F, FontStyle.Bold);
 
         // Three same-size buttons in one row; the caption sits inside, under a symbol.
-        btnConnect = ActionButton("⏻", "Connect", "Connect securely");
+        btnConnect = ActionButton("▶", "Connect", "Connect securely");
         btnConnect.Font = new Font("Segoe UI", 9F, FontStyle.Bold); // the primary one is bold
         btnConnect.Click += btnConnect_Click;
         btnReset = ActionButton("↻", "Reset", "Reset order and connect");
         btnReset.AccessibleDescription = "Forget the learned speeds and order, then connect with Auto";
         btnReset.Click += btnReset_Click;
-        btnNextProtocol = ActionButton("⏭", "Next", "Next protocol");
+        btnReset.BackColor = ColorTranslator.FromHtml("#E6DCFA"); // light violet: the brand action
+        btnReset.UseVisualStyleBackColor = false;
+        btnNextProtocol = ActionButton("»", "Next", "Next protocol");
         btnNextProtocol.Enabled = false;
         btnNextProtocol.AccessibleDescription = "Stop the current protocol attempt and try the next one";
         btnNextProtocol.Click += btnNextProtocol_Click;
+        btnNextProtocol.BackColor = ColorTranslator.FromHtml("#D6ECF8"); // light sky: move on
+        btnNextProtocol.UseVisualStyleBackColor = false;
         var actionRow = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, RowCount = 1, Margin = new Padding(0, 6, 0, 6) };
         for (var i = 0; i < 3; i++) actionRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3)); // equal width at any window size
         actionRow.Controls.Add(btnConnect, 0, 0);
@@ -101,6 +122,7 @@ partial class Form1
         btnUpdates = new ToolStripMenuItem("Check for &updates...") { AccessibleDescription = "Check for a new AetherGui release and a newer core" };
         btnUpdates.Click += async (_, _) => await CheckUpdatesAsync(interactive: true);
 
+        // The connected protocol's history on this device; empty while not connected.
         lblStatus = new Label { Text = "●  Disconnected", ForeColor = Palette.Disconnected, AutoSize = true, Font = new Font("Segoe UI", 10F, FontStyle.Bold), Margin = new Padding(0, 0, 0, 0), AccessibleName = "Connection status: Disconnected" };
         // Status bar along the bottom, with a sunken pane; no sizing grip since the size is locked.
         lblDelay = new ToolStripStatusLabel("Delay: -") { Spring = false, TextAlign = ContentAlignment.MiddleLeft, BorderSides = ToolStripStatusLabelBorderSides.All, BorderStyle = Border3DStyle.SunkenOuter };
@@ -115,6 +137,9 @@ partial class Form1
             Margin = new Padding(0, 4, 0, 0)
         };
 
+        lblProtocol = new Label { Text = "Protocol", Font = bold, AutoSize = true, Margin = new Padding(0, 8, 0, 2) };
+        cboProtocol = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Top, DropDownWidth = 360, Margin = new Padding(0, 0, 0, 4), AccessibleName = "Connection protocol", DrawMode = DrawMode.OwnerDrawFixed, ItemHeight = 17 };
+        cboProtocol.DrawItem += DrawProtocolItem;
         lblScan = new Label { Text = "Server search", Font = bold, AutoSize = true, Margin = new Padding(0, 6, 0, 2) };
         cboScan = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Top, DropDownWidth = 360, Margin = new Padding(0, 0, 0, 4), AccessibleName = "Server search mode" };
 
@@ -135,19 +160,30 @@ partial class Form1
         tryRow.Controls.Add(new Label { Text = "Auto try (seconds)", AutoSize = true, Margin = new Padding(0, 5, 4, 0) });
         tryRow.Controls.Add(numTrySeconds);
 
-        var controlLayout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 8, Margin = Padding.Empty };
+        // The connected protocol's numbers as four small cards, like the Android app.
+        statCards = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 4, RowCount = 1, Margin = new Padding(0, 0, 0, 6), Visible = false, AccessibleName = "Connected protocol stats" };
+        for (var i = 0; i < 4; i++) statCards.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+        statPing = StatCard(statCards, "Ping", 0);
+        statSuccess = StatCard(statCards, "Success", 1);
+        statAvg = StatCard(statCards, "Avg time", 2);
+        statTries = StatCard(statCards, "Tries", 3);
+
+        var controlLayout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 11, Margin = Padding.Empty };
         controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); // fit the panel, never the content
-        for (var i = 0; i < 8; i++) controlLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        for (var i = 0; i < 11; i++) controlLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         // The buttons sit right under the status so they stay in view; the rest scrolls if large text needs more room.
         controlLayout.Controls.Add(status, 0, 0);
         controlLayout.Controls.Add(prgConnecting, 0, 1);
         controlLayout.Controls.Add(actionRow, 0, 2);
-        controlLayout.Controls.Add(tryRow, 0, 3);
-        controlLayout.Controls.Add(lblScan, 0, 4);
-        controlLayout.Controls.Add(cboScan, 0, 5);
-        controlLayout.Controls.Add(chkSysProxy, 0, 6);
+        controlLayout.Controls.Add(statCards, 0, 3);
+        controlLayout.Controls.Add(tryRow, 0, 4);
+        controlLayout.Controls.Add(lblProtocol, 0, 5);
+        controlLayout.Controls.Add(cboProtocol, 0, 6);
+        controlLayout.Controls.Add(lblScan, 0, 7);
+        controlLayout.Controls.Add(cboScan, 0, 8);
+        controlLayout.Controls.Add(chkSysProxy, 0, 9);
         chkShowLog = new CheckBox { Text = "Show latest activity", AutoSize = true, Margin = new Padding(0, 4, 0, 2) };
-        controlLayout.Controls.Add(chkShowLog, 0, 7);
+        controlLayout.Controls.Add(chkShowLog, 0, 10);
 
         // Small sunken log of the latest lines that fills the space left under the controls.
         txtMiniLog = new RichTextBox

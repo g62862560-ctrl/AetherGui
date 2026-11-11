@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import 'aether.dart';
 import 'auto_order_page.dart';
+import 'protocol_order_sheet.dart';
 import 'core_options.dart';
 import 'core_settings_page.dart';
 
@@ -32,10 +33,17 @@ Future<void> main() async {
 
 // One place for every color, and the dark theme built from them.
 abstract final class Palette {
-  static const background = Color(0xFF121212);
-  static const surface = Color(0xFF1E1E1E);
+  // Neutrals lean toward the accent's violet so gray surfaces feel part of the brand.
+  static const background = Color(0xFF131119);
+  static const surface = Color(0xFF1D1A26);
   static const accent = Color(0xFFB585FF); // neon purple
-  static const secondaryText = Color(0xFF9E9E9E);
+  static const secondaryText = Color(
+    0xFFC3BED0,
+  ); // ~9:1 on surface, readable in sunlight
+  // Role colors for the secondary actions: Reset = accent (brand action), Next = sky (move on).
+  static const resetBg = Color(0xFF3B2A63);
+  static const nextBg = Color(0xFF1E3A4C);
+  static const next = Color(0xFF7DD3FC);
   static const connected = Color(0xFF4ADE80); // neon green
   static const connecting = Color(0xFFFBBF24);
   static const disconnected = Color(0xFFF87171); // muted coral
@@ -117,6 +125,9 @@ class _HomePageState extends State<HomePage> {
   var _menuOrder = <int>[];
   // Per-protocol history (successful connects, failures, speed), shown in the Auto order list.
   var _stats = <int, ProtocolStat>{};
+  ProtocolStat? get _connectedStat => _statusColor == seaGreen
+      ? _stats[Aether.presets.indexWhere((p) => p.name == _route)]
+      : null;
 
   File get _settings => File('${Aether.dir}/settings.txt');
 
@@ -178,6 +189,8 @@ class _HomePageState extends State<HomePage> {
         ...Aether.menuPresetIndexes.where((i) => !_order.contains(i)),
       ];
     }
+    _order = Aether.sortByStats(_order, _stats);
+    _menuOrder = Aether.sortByStats(_menuOrder, _stats);
     _httpPortText.text = '${Aether.httpPort}';
     _socksPortText.text = '${Aether.socksPort}';
     _testUrlText.text = Aether.testUrl;
@@ -295,7 +308,7 @@ class _HomePageState extends State<HomePage> {
           if (_nextRequested) attempt.cancel();
           await _connectAndMonitor(
             p,
-            chosen < 0 ? _trySeconds : p.startupSecs,
+            _trySeconds, // the user's limit, for a picked protocol too
             attempt,
           );
           await attempt.delay(1000);
@@ -432,6 +445,9 @@ class _HomePageState extends State<HomePage> {
       _connectMs,
       Aether.presets.indexOf(p),
     );
+    // Both lists follow the history: what worked on top, what only failed at the bottom.
+    _order = Aether.sortByStats(_order, _stats);
+    _menuOrder = Aether.sortByStats(_menuOrder, _stats);
     _saveSettings();
     if (!connected) {
       final failure = proc.exited
@@ -450,6 +466,11 @@ class _HomePageState extends State<HomePage> {
       realDelayTest
           ? 'Connected via ${p.name} in ${(took.elapsedMilliseconds / 1000).toStringAsFixed(1)}s, delay $ms ms.'
           : 'Connected via ${p.name} in ${(took.elapsedMilliseconds / 1000).toStringAsFixed(1)}s; local proxy ready, internet not tested.',
+      seaGreen,
+    );
+    _step(
+      '${p.name} on this device: ${stat.ok} ok, ${stat.fail} failed, '
+      '${stat.ok * 100 ~/ stat.tries}% success, avg ${(stat.avgMs / 1000).toStringAsFixed(1)}s.',
       seaGreen,
     );
     if (!_vpn) {
@@ -868,27 +889,13 @@ class _HomePageState extends State<HomePage> {
                   ),
                   const SizedBox(height: 16),
                   _routeLine(),
-                  if (_statusColor == seaGreen && _delay.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Text.rich(
-                        TextSpan(
-                          text: _delay == 'not tested' ? 'Delay ' : 'Ping ',
-                          style: const TextStyle(color: Palette.secondaryText),
-                          children: [
-                            TextSpan(
-                              text: _delay,
-                              style: TextStyle(
-                                color: _delay == 'not tested'
-                                    ? Palette.secondaryText
-                                    : _pingColor(_delay),
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
+                  // Once connected, the numbers sit in small cards instead of one crowded line.
+                  if (_statusColor == seaGreen) ...[
+                    const SizedBox(height: 12),
+                    _statCards(),
+                  ],
+                  const SizedBox(height: 12),
+                  _protocolMenu(busy),
                   const SizedBox(height: 16),
                   Row(
                     children: [
@@ -995,14 +1002,21 @@ class _HomePageState extends State<HomePage> {
     required IconData icon,
     required String label,
     required VoidCallback? onPressed,
+    required Color background,
+    required Color foreground,
   }) => SizedBox(
     height: _actionHeight,
     child: Tooltip(
       message: tooltip,
-      child: FilledButton.tonal(
+      child: FilledButton(
         key: key,
         onPressed: onPressed,
         style: FilledButton.styleFrom(
+          backgroundColor: background,
+          foregroundColor: foreground,
+          // Disabled keeps its hue, only quieter, so the row stays colored when Next is idle.
+          disabledBackgroundColor: background.withValues(alpha: 0.45),
+          disabledForegroundColor: foreground.withValues(alpha: 0.5),
           padding: const EdgeInsets.symmetric(horizontal: 4),
           shape: _actionShape,
         ),
@@ -1015,7 +1029,9 @@ class _HomePageState extends State<HomePage> {
     key: const Key('nextProtocol'),
     tooltip: 'Next protocol',
     icon: Icons.skip_next_rounded,
-    label: 'nextProtocol',
+    label: 'Next',
+    background: Palette.nextBg,
+    foreground: Palette.next,
     onPressed: busy ? _nextProtocol : null,
   );
 
@@ -1088,7 +1104,9 @@ class _HomePageState extends State<HomePage> {
     key: const Key('resetOrderConnect'),
     tooltip: 'Reset order and connect',
     icon: Icons.restart_alt_rounded,
-    label: 'ResetOrder&Connet',
+    label: 'Reset',
+    background: Palette.resetBg,
+    foreground: Palette.accent,
     onPressed: busy ? null : _resetOrderAndConnect,
   );
 
@@ -1104,6 +1122,45 @@ class _HomePageState extends State<HomePage> {
     });
     _saveSettings();
     await _connect();
+  }
+
+  // The main connection choice stays on Home; Auto's detailed order remains in Settings.
+  Widget _protocolMenu(bool busy) {
+    final label = _preset < 0
+        ? 'Auto (order in Settings)'
+        : Aether.presets[_preset].label;
+    return ListTile(
+      key: const Key('connectionProtocol'),
+      enabled: !busy,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(4),
+        side: BorderSide(color: Theme.of(context).dividerColor),
+      ),
+      leading: const Icon(Icons.vpn_lock_outlined),
+      title: Text(label),
+      subtitle: const Text('Tap to choose or drag to reorder'),
+      trailing: const Icon(Icons.unfold_more_rounded),
+      onTap: busy ? null : _editProtocolOrder,
+    );
+  }
+
+  Future<void> _editProtocolOrder() async {
+    final result = await showModalBottomSheet<ProtocolOrderResult>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => ProtocolOrderSheet(order: _menuOrder, selected: _preset),
+    );
+    if (!mounted || result == null) return;
+    setState(() {
+      _menuOrder = [...result.order];
+      final checked = _order.toSet();
+      _order = [
+        for (final i in _menuOrder)
+          if (checked.contains(i)) i,
+      ];
+      _preset = result.selected;
+    });
+    _saveSettings();
   }
 
   // Proxy mode: nothing is routed for the user, so show where to point apps, ready to copy.
@@ -1150,6 +1207,84 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  // Ping, success rate, average connect time and tries for the connected protocol; each value colored by meaning.
+  Widget _statCards() {
+    final st = _connectedStat;
+    final tested = _delay.isNotEmpty && _delay != 'not tested';
+    final rate = st == null || st.tries == 0 ? null : st.ok * 100 ~/ st.tries;
+    final avg = st == null || st.ok == 0 ? null : st.avgMs / 1000;
+    Widget card(String label, String value, Color color) => Expanded(
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+          child: Column(
+            children: [
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: Palette.secondaryText,
+                ),
+              ),
+              const SizedBox(height: 4),
+              FittedBox(
+                child: Text(
+                  value,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: color,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    const gap = SizedBox(width: 8);
+    return Row(
+      key: const Key('connectedStats'),
+      children: [
+        card(
+          'Ping',
+          tested ? _delay : 'not tested',
+          tested ? _pingColor(_delay) : Palette.secondaryText,
+        ),
+        gap,
+        card(
+          'Success',
+          rate == null ? '-' : '$rate%',
+          rate == null
+              ? Palette.secondaryText
+              : rate >= 60
+              ? Palette.connected
+              : rate >= 30
+              ? Palette.connecting
+              : Palette.disconnected,
+        ),
+        gap,
+        card(
+          'Avg connect',
+          avg == null ? '-' : '${avg.toStringAsFixed(1)}s',
+          avg == null
+              ? Palette.secondaryText
+              : avg < 5
+              ? Palette.connected
+              : avg < 15
+              ? Palette.connecting
+              : Palette.disconnected,
+        ),
+        gap,
+        card(
+          'Tries',
+          st == null ? '-' : '${st.ok}/${st.tries}',
+          Palette.accent,
+        ),
+      ],
+    );
+  }
+
   Widget _quickSettings() => Card(
     child: Padding(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
@@ -1162,7 +1297,7 @@ class _HomePageState extends State<HomePage> {
           ),
           const SizedBox(height: 8),
           SwitchListTile(
-            secondary: const Icon(Icons.bolt_outlined),
+            secondary: const Icon(Icons.bolt_outlined, color: Palette.accent),
             title: const Text('Auto-Connect on Startup'),
             value: _autoConnect,
             onChanged: (v) {
@@ -1172,7 +1307,7 @@ class _HomePageState extends State<HomePage> {
           ),
           // Android, not the app, can block traffic while the VPN is down, so this opens its setting.
           const ListTile(
-            leading: Icon(Icons.block_rounded),
+            leading: Icon(Icons.block_rounded, color: Palette.disconnected),
             title: Text('Kill Switch'),
             subtitle: Text(
               'Turn on "Always-on VPN" and "Block connections without VPN"',
@@ -1187,29 +1322,29 @@ class _HomePageState extends State<HomePage> {
 
   // What the current connect is doing, step by step, so a slow route does not look stuck.
   Widget _stepsCard(bool busy) => Card(
-    child: Padding(
-      padding: const EdgeInsets.fromLTRB(20, 8, 8, 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    clipBehavior: Clip.antiAlias,
+    child: Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        key: const Key('connectionSteps'),
+        initiallyExpanded: true,
+        tilePadding: const EdgeInsets.fromLTRB(20, 0, 12, 0),
+        childrenPadding: const EdgeInsets.fromLTRB(20, 0, 12, 12),
+        title: const Text(
+          'Connection steps',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ),
+        // Collapsed, the latest step still says what is happening.
+        subtitle: Text(
+          _steps.last.$1,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: _steps.last.$2 ?? Palette.secondaryText),
+        ),
         children: [
-          Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'Connection steps',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                ),
-              ),
-              IconButton(
-                tooltip: 'Clear steps',
-                icon: const Icon(Icons.close_rounded, size: 20),
-                onPressed: busy ? null : () => setState(_steps.clear),
-              ),
-            ],
-          ),
           for (final (i, (text, color)) in _steps.indexed)
             Padding(
-              padding: const EdgeInsets.only(top: 8, right: 12),
+              padding: const EdgeInsets.only(top: 8),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -1222,6 +1357,14 @@ class _HomePageState extends State<HomePage> {
                 ],
               ),
             ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: busy ? null : () => setState(_steps.clear),
+              icon: const Icon(Icons.close_rounded, size: 18),
+              label: const Text('Clear'),
+            ),
+          ),
         ],
       ),
     ),
