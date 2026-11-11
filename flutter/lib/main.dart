@@ -7,7 +7,6 @@ import 'aether.dart';
 import 'auto_order_page.dart';
 import 'core_options.dart';
 import 'core_settings_page.dart';
-import 'protocol_order_sheet.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,6 +16,15 @@ Future<void> main() async {
       title: 'Aether VPN',
       debugShowCheckedModeBanner: false,
       theme: Palette.theme,
+      // Keeps layouts intact when the system font size is very large.
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(
+          textScaler: MediaQuery.textScalerOf(
+            context,
+          ).clamp(maxScaleFactor: 1.3),
+        ),
+        child: child!,
+      ),
       home: const HomePage(),
     ),
   );
@@ -107,6 +115,8 @@ class _HomePageState extends State<HomePage> {
   var _order = <int>[];
   // Display order of every protocol in the main list, editable by dragging.
   var _menuOrder = <int>[];
+  // Per-protocol history (successful connects, failures, speed), shown in the Auto order list.
+  var _stats = <int, ProtocolStat>{};
 
   File get _settings => File('${Aether.dir}/settings.txt');
 
@@ -143,6 +153,7 @@ class _HomePageState extends State<HomePage> {
       _connectMs = Aether.parseConnectMs(
         RegExp(r'ConnectMs=(.*)').firstMatch(s)?.group(1),
       );
+      _stats = Aether.parseStats(RegExp(r'Stats=(.*)').firstMatch(s)?.group(1));
       _order = s.contains('OrderVersion=3')
           ? Aether.parseOrder(RegExp(r'AutoOrder=(.*)').firstMatch(s)?.group(1))
           : [];
@@ -242,6 +253,7 @@ class _HomePageState extends State<HomePage> {
     'ConnectMs=${Aether.formatConnectMs(_connectMs)}\n'
     'AutoOrder=${_order.join(',')}\n'
     'MenuOrder=${_menuOrder.join(',')}\n'
+    'Stats=${Aether.formatStats(_stats)}\n'
     'OrderVersion=3\n'
     'TrySeconds=$_trySeconds\n',
   );
@@ -404,6 +416,17 @@ class _HomePageState extends State<HomePage> {
     _connectMs[Aether.presets.indexOf(p)] = connected
         ? took.elapsedMilliseconds
         : -1;
+    final stat = _stats.putIfAbsent(
+      Aether.presets.indexOf(p),
+      () => ProtocolStat(),
+    );
+    if (connected) {
+      stat.ok++;
+      stat.totalMs += took.elapsedMilliseconds;
+      stat.lastOk = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    } else {
+      stat.fail++;
+    }
     _order = Aether.rerank(
       _autoIndexes(_order),
       _connectMs,
@@ -570,6 +593,7 @@ class _HomePageState extends State<HomePage> {
           order: _menuOrder,
           checked: _order,
           ranking: _autoIndexes(),
+          stats: _stats,
         ),
       ),
     );
@@ -832,54 +856,42 @@ class _HomePageState extends State<HomePage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Button and route share one row so the top of the screen is not mostly empty.
+                  // All three actions share one row: same size and shape, status color only on Connect.
                   Row(
                     children: [
-                      _powerButton(busy),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                      Expanded(child: _powerButton(busy)),
+                      const SizedBox(width: 12),
+                      Expanded(child: _resetConnectButton(busy)),
+                      const SizedBox(width: 12),
+                      Expanded(child: _nextButton(busy)),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  _routeLine(),
+                  if (_statusColor == seaGreen && _delay.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text.rich(
+                        TextSpan(
+                          text: _delay == 'not tested' ? 'Delay ' : 'Ping ',
+                          style: const TextStyle(color: Palette.secondaryText),
                           children: [
-                            _routeLine(),
-                            if (_statusColor == seaGreen && _delay.isNotEmpty)
-                              Text.rich(
-                                TextSpan(
-                                  text: _delay == 'not tested'
-                                      ? 'Delay '
-                                      : 'Ping ',
-                                  style: const TextStyle(
-                                    color: Palette.secondaryText,
-                                  ),
-                                  children: [
-                                    TextSpan(
-                                      text: _delay,
-                                      style: TextStyle(
-                                        color: _delay == 'not tested'
-                                            ? Palette.secondaryText
-                                            : _pingColor(_delay),
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ],
-                                ),
+                            TextSpan(
+                              text: _delay,
+                              style: TextStyle(
+                                color: _delay == 'not tested'
+                                    ? Palette.secondaryText
+                                    : _pingColor(_delay),
+                                fontWeight: FontWeight.w600,
                               ),
+                            ),
                           ],
                         ),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  _protocolMenu(busy),
-                  const SizedBox(height: 8),
+                    ),
+                  const SizedBox(height: 16),
                   Row(
                     children: [
-                      OutlinedButton.icon(
-                        onPressed: busy ? _nextProtocol : null,
-                        icon: const Icon(Icons.skip_next_rounded),
-                        label: const Text('Next protocol'),
-                      ),
-                      const SizedBox(width: 12),
                       Expanded(
                         child: TextField(
                           key: const Key('autoTrySeconds'),
@@ -943,14 +955,68 @@ class _HomePageState extends State<HomePage> {
 
   // Large square on/off button: red when off, cycling light colors while connecting, green when on; the ping shows beside it.
   // The icon (power, cancel, shield) and the screen-reader label carry the state too, so color is never the only signal.
-  Widget _squareButton(Color color, IconData icon) => FilledButton(
-    onPressed: _connect,
-    style: FilledButton.styleFrom(
-      backgroundColor: color,
-      padding: EdgeInsets.zero,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+  static const _actionHeight = 72.0;
+  static final _actionShape = RoundedRectangleBorder(
+    borderRadius: BorderRadius.circular(16),
+  );
+
+  // Icon with a small label inside the button.
+  Widget _buttonBody(IconData icon, String label, [Color? color]) => Column(
+    mainAxisAlignment: MainAxisAlignment.center,
+    children: [
+      Icon(icon, size: 30, color: color),
+      const SizedBox(height: 4),
+      ExcludeSemantics(
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(fontSize: 11, color: color),
+        ),
+      ),
+    ],
+  );
+
+  Widget _squareButton(Color color, IconData icon, String label) =>
+      FilledButton(
+        onPressed: _connect,
+        style: FilledButton.styleFrom(
+          backgroundColor: color,
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          shape: _actionShape,
+        ),
+        child: _buttonBody(icon, label, Palette.background),
+      );
+
+  // Secondary actions: same size and shape as Connect, neutral tonal color.
+  Widget _tonalAction({
+    Key? key,
+    required String tooltip,
+    required IconData icon,
+    required String label,
+    required VoidCallback? onPressed,
+  }) => SizedBox(
+    height: _actionHeight,
+    child: Tooltip(
+      message: tooltip,
+      child: FilledButton.tonal(
+        key: key,
+        onPressed: onPressed,
+        style: FilledButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          shape: _actionShape,
+        ),
+        child: _buttonBody(icon, label),
+      ),
     ),
-    child: Icon(icon, size: 40, color: Palette.background),
+  );
+
+  Widget _nextButton(bool busy) => _tonalAction(
+    key: const Key('nextProtocol'),
+    tooltip: 'Next protocol',
+    icon: Icons.skip_next_rounded,
+    label: 'nextProtocol',
+    onPressed: busy ? _nextProtocol : null,
   );
 
   // Light colors the connecting button cycles through, blended smoothly; t runs 0..1.
@@ -983,15 +1049,22 @@ class _HomePageState extends State<HomePage> {
           ? 'Connecting, tap to cancel'
           : 'Connect',
       // Square toggle button filled with the status color; while connecting it drifts through light colors.
-      child: SizedBox.square(
-        dimension: 80,
+      child: SizedBox(
+        height: _actionHeight,
         child: busy && !connected
             ? _Loop(
                 period: const Duration(seconds: 4),
-                builder: (t) =>
-                    _squareButton(_lightColorAt(t), Icons.close_rounded),
+                builder: (t) => _squareButton(
+                  _lightColorAt(t),
+                  Icons.close_rounded,
+                  'Cancel',
+                ),
               )
-            : _squareButton(_statusColor, icon),
+            : _squareButton(
+                _statusColor,
+                icon,
+                connected ? 'Connected' : 'Connect',
+              ),
       ),
     );
   }
@@ -1010,43 +1083,27 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // The main connection choice stays on Home; Auto's detailed order remains in Settings.
-  Widget _protocolMenu(bool busy) {
-    final label = _preset < 0
-        ? 'Auto (order in Settings)'
-        : Aether.presets[_preset].label;
-    return ListTile(
-      key: const Key('connectionProtocol'),
-      enabled: !busy,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(4),
-        side: BorderSide(color: Theme.of(context).dividerColor),
-      ),
-      leading: const Icon(Icons.vpn_lock_outlined),
-      title: Text(label),
-      subtitle: const Text('Tap to choose or drag to reorder'),
-      trailing: const Icon(Icons.unfold_more_rounded),
-      onTap: busy ? null : _editProtocolOrder,
-    );
-  }
+  // Round button: forget learned speeds and the saved order, go back to Auto, then connect.
+  Widget _resetConnectButton(bool busy) => _tonalAction(
+    key: const Key('resetOrderConnect'),
+    tooltip: 'Reset order and connect',
+    icon: Icons.restart_alt_rounded,
+    label: 'ResetOrder&Connet',
+    onPressed: busy ? null : _resetOrderAndConnect,
+  );
 
-  Future<void> _editProtocolOrder() async {
-    final result = await showModalBottomSheet<ProtocolOrderResult>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => ProtocolOrderSheet(order: _menuOrder, selected: _preset),
-    );
-    if (!mounted || result == null) return;
+  Future<void> _resetOrderAndConnect() async {
     setState(() {
-      _menuOrder = [...result.order];
-      final checked = _order.toSet();
-      _order = [
-        for (final i in _menuOrder)
-          if (checked.contains(i)) i,
+      _connectMs = {};
+      _order = _autoIndexes();
+      _menuOrder = [
+        ..._order,
+        ...Aether.menuPresetIndexes.where((i) => !_order.contains(i)),
       ];
-      _preset = result.selected;
+      _preset = -1;
     });
     _saveSettings();
+    await _connect();
   }
 
   // Proxy mode: nothing is routed for the user, so show where to point apps, ready to copy.

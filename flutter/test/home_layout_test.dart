@@ -35,39 +35,6 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('protocol can be selected on Home and is saved', (tester) async {
-    final dir = Directory.systemTemp.createTempSync('aether-protocol-');
-    Aether.dir = dir.path;
-    Aether.exe = '${dir.path}/missing-core';
-    addTearDown(() => dir.deleteSync(recursive: true));
-    await tester.pumpWidget(
-      MaterialApp(theme: Palette.theme, home: const HomePage()),
-    );
-    await tester.pumpAndSettle();
-
-    final wireGuard = Aether.presets.indexWhere((p) => p.name == 'WireGuard');
-    await tester.tap(find.byKey(const Key('connectionProtocol')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('WireGuard').last);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Done'));
-    await tester.pumpAndSettle();
-
-    expect(
-      find.descendant(
-        of: find.byKey(const Key('connectionProtocol')),
-        matching: find.text('WireGuard'),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      File('${dir.path}/settings.txt').readAsStringSync(),
-      contains('Preset=$wireGuard'),
-    );
-    expect(tester.takeException(), isNull);
-    await tester.pumpWidget(const SizedBox.shrink());
-  });
-
   testWidgets('Auto try seconds are saved only in range', (tester) async {
     final dir = Directory.systemTemp.createTempSync('aether-try-seconds-');
     Aether.dir = dir.path;
@@ -81,9 +48,7 @@ void main() {
     final field = find.byKey(const Key('autoTrySeconds'));
     expect(
       tester
-          .widget<OutlinedButton>(
-            find.widgetWithText(OutlinedButton, 'Next protocol'),
-          )
+          .widget<FilledButton>(find.byKey(const Key('nextProtocol')))
           .onPressed,
       isNull,
     );
@@ -130,33 +95,9 @@ void main() {
       expect(find.bySemanticsLabel('Connect'), findsOneWidget);
       expect(find.text('Auto - fastest route'), findsOneWidget);
       expect(find.text('You are not protected'), findsNothing);
-      expect(find.byKey(const Key('connectionProtocol')), findsOneWidget);
+      expect(find.byKey(const Key('resetOrderConnect')), findsOneWidget);
+      expect(find.byKey(const Key('connectionProtocol')), findsNothing);
       expect(find.text('Waiting for logs...'), findsNothing);
-      final protocolTile = tester.widget<ListTile>(
-        find.byKey(const Key('connectionProtocol')),
-      );
-      expect(protocolTile.enabled, isTrue);
-      expect(find.byTooltip('Reorder protocols'), findsNothing);
-
-      // The single protocol list opens with drag handles and the preferred order.
-      await tester.tap(find.byKey(const Key('connectionProtocol')));
-      await tester.pumpAndSettle();
-      expect(find.text('Protocol order'), findsOneWidget);
-      const preferredNames = [
-        'MASQUE HTTP/2 → Psiphon',
-        'MASQUE-in-MASQUE → Psiphon',
-        'WARP-in-WARP → Psiphon',
-      ];
-      for (final name in preferredNames) {
-        expect(find.text(name), findsOneWidget);
-      }
-      final tops = [
-        for (final name in preferredNames) tester.getTopLeft(find.text(name)).dy,
-      ];
-      expect(tops[0], lessThan(tops[1]));
-      expect(tops[1], lessThan(tops[2]));
-      await tester.tap(find.text('Done'));
-      await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
 
       // Settings keeps Auto order, the log, and core settings; Protocol stays on Home.

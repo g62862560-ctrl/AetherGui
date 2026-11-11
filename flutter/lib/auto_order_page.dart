@@ -12,7 +12,9 @@ class AutoOrderPage extends StatefulWidget {
     required this.order,
     required this.checked,
     required this.ranking,
+    this.stats = const {},
   });
+  final Map<int, ProtocolStat> stats; // how each protocol did on this device
   final List<int> order; // full main-list order
   final List<int> checked; // what Auto uses now
   final List<int> ranking; // the plain speed ranking, for Reset
@@ -64,6 +66,40 @@ class _AutoOrderPageState extends State<AutoOrderPage> {
     Navigator.pop(context, (order: _items, checked: checked));
   }
 
+  static String _ago(int epochSeconds) {
+    final s = DateTime.now().millisecondsSinceEpoch ~/ 1000 - epochSeconds;
+    if (s < 3600) return '${(s ~/ 60).clamp(1, 59)}m ago';
+    if (s < 86400) return '${s ~/ 3600}h ago';
+    return '${s ~/ 86400}d ago';
+  }
+
+  // Verdict first (the answer), then the numbers behind it.
+  Widget _statLine(ProtocolStat st) {
+    final (verdict, color) = switch (st.verdict) {
+      'good' => ('Works for you', const Color(0xFF4ADE80)),
+      'bad' => ('Often fails', const Color(0xFFF87171)),
+      'maybe' => ('Too few tries', const Color(0xFFFBBF24)),
+      _ => ('Not tried yet', Colors.grey),
+    };
+    final details = st.tries == 0
+        ? ''
+        : '${st.ok} ok · ${st.fail} failed'
+              '${st.ok > 0 ? ' · avg ${(st.avgMs / 1000).toStringAsFixed(1)}s' : ''}'
+              '${st.lastOk > 0 ? ' · last ok ${_ago(st.lastOk)}' : ''}';
+    return Text.rich(
+      TextSpan(
+        children: [
+          TextSpan(
+            text: verdict,
+            style: TextStyle(color: color, fontWeight: FontWeight.w600),
+          ),
+          if (details.isNotEmpty) TextSpan(text: '\n$details'),
+        ],
+      ),
+      style: const TextStyle(fontSize: 12),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
@@ -99,6 +135,7 @@ class _AutoOrderPageState extends State<AutoOrderPage> {
                   key: ValueKey(i),
                   controlAffinity: ListTileControlAffinity.leading,
                   title: Text(Aether.presets[i].label),
+                  subtitle: _statLine(widget.stats[i] ?? ProtocolStat()),
                   value: _on.contains(i),
                   onChanged: (v) =>
                       setState(() => v == true ? _on.add(i) : _on.remove(i)),

@@ -24,8 +24,7 @@ partial class Form1
     private ToolStripMenuItem btnUpdates = null!;
     private Label lblStatus = null!;
     private ToolStripStatusLabel lblDelay = null!;
-    private Label lblProtocol = null!;
-    private ComboBox cboProtocol = null!;
+    private Button btnReset = null!;
     private Label lblScan = null!;
     private ComboBox cboScan = null!;
     private RichTextBox txtMiniLog = null!;
@@ -48,6 +47,13 @@ partial class Form1
         return button;
     }
 
+    // Same-size action button: a symbol over a short caption, filling its column.
+    private static Button ActionButton(string glyph, string caption, string accessibleName) => new()
+    {
+        Text = glyph + "\n" + caption, AccessibleName = accessibleName, Dock = DockStyle.Fill,
+        MinimumSize = new Size(0, 56), Margin = new Padding(3), UseVisualStyleBackColor = true
+    };
+
     // Gray panel with an etched 3D frame, named so tests can find it.
     private static Panel Card(string name)
     {
@@ -62,16 +68,22 @@ partial class Form1
         Font = new Font("Segoe UI", 9F);
         var bold = new Font("Segoe UI", 9F, FontStyle.Bold);
 
-        btnConnect = ClassicButton("Connect securely", primary: true);
-        btnConnect.AutoSize = false;
-        btnConnect.Dock = DockStyle.Top;
-        btnConnect.Height = 30;
-        btnConnect.Margin = new Padding(0, 6, 0, 6);
+        // Three same-size buttons in one row; the caption sits inside, under a symbol.
+        btnConnect = ActionButton("⏻", "Connect", "Connect securely");
+        btnConnect.Font = new Font("Segoe UI", 9F, FontStyle.Bold); // the primary one is bold
         btnConnect.Click += btnConnect_Click;
-        btnNextProtocol = ClassicButton("Next protocol");
+        btnReset = ActionButton("↻", "Reset", "Reset order and connect");
+        btnReset.AccessibleDescription = "Forget the learned speeds and order, then connect with Auto";
+        btnReset.Click += btnReset_Click;
+        btnNextProtocol = ActionButton("⏭", "Next", "Next protocol");
         btnNextProtocol.Enabled = false;
         btnNextProtocol.AccessibleDescription = "Stop the current protocol attempt and try the next one";
         btnNextProtocol.Click += btnNextProtocol_Click;
+        var actionRow = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 3, RowCount = 1, Margin = new Padding(0, 6, 0, 6) };
+        for (var i = 0; i < 3; i++) actionRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3)); // equal width at any window size
+        actionRow.Controls.Add(btnConnect, 0, 0);
+        actionRow.Controls.Add(btnReset, 1, 0);
+        actionRow.Controls.Add(btnNextProtocol, 2, 0);
         numTrySeconds = new NumericUpDown
         {
             Minimum = 5, Maximum = 3600, Width = 60, Margin = new Padding(0, 0, 0, 6),
@@ -103,9 +115,6 @@ partial class Form1
             Margin = new Padding(0, 4, 0, 0)
         };
 
-        lblProtocol = new Label { Text = "Protocol", Font = bold, AutoSize = true, Margin = new Padding(0, 8, 0, 2) };
-        cboProtocol = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Top, DropDownWidth = 360, Margin = new Padding(0, 0, 0, 4), AccessibleName = "Connection protocol", DrawMode = DrawMode.OwnerDrawFixed, ItemHeight = 17 };
-        cboProtocol.DrawItem += DrawProtocolItem;
         lblScan = new Label { Text = "Server search", Font = bold, AutoSize = true, Margin = new Padding(0, 6, 0, 2) };
         cboScan = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Top, DropDownWidth = 360, Margin = new Padding(0, 0, 0, 4), AccessibleName = "Server search mode" };
 
@@ -123,25 +132,22 @@ partial class Form1
         status.Controls.Add(lblStatus);
 
         var tryRow = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = true, Margin = Padding.Empty };
-        tryRow.Controls.Add(btnNextProtocol);
         tryRow.Controls.Add(new Label { Text = "Auto try (seconds)", AutoSize = true, Margin = new Padding(0, 5, 4, 0) });
         tryRow.Controls.Add(numTrySeconds);
 
-        var controlLayout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 10, Margin = Padding.Empty };
+        var controlLayout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 8, Margin = Padding.Empty };
         controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); // fit the panel, never the content
-        for (var i = 0; i < 10; i++) controlLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        // Connect sits right under the status so it stays in view; the rest scrolls if large text needs more room.
+        for (var i = 0; i < 8; i++) controlLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        // The buttons sit right under the status so they stay in view; the rest scrolls if large text needs more room.
         controlLayout.Controls.Add(status, 0, 0);
         controlLayout.Controls.Add(prgConnecting, 0, 1);
-        controlLayout.Controls.Add(btnConnect, 0, 2);
+        controlLayout.Controls.Add(actionRow, 0, 2);
         controlLayout.Controls.Add(tryRow, 0, 3);
-        controlLayout.Controls.Add(lblProtocol, 0, 4);
-        controlLayout.Controls.Add(cboProtocol, 0, 5);
-        controlLayout.Controls.Add(lblScan, 0, 6);
-        controlLayout.Controls.Add(cboScan, 0, 7);
-        controlLayout.Controls.Add(chkSysProxy, 0, 8);
+        controlLayout.Controls.Add(lblScan, 0, 4);
+        controlLayout.Controls.Add(cboScan, 0, 5);
+        controlLayout.Controls.Add(chkSysProxy, 0, 6);
         chkShowLog = new CheckBox { Text = "Show latest activity", AutoSize = true, Margin = new Padding(0, 4, 0, 2) };
-        controlLayout.Controls.Add(chkShowLog, 0, 9);
+        controlLayout.Controls.Add(chkShowLog, 0, 7);
 
         // Small sunken log of the latest lines that fills the space left under the controls.
         txtMiniLog = new RichTextBox

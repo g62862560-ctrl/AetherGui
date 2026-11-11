@@ -23,8 +23,7 @@ class _ProtocolOrderSheetState extends State<ProtocolOrderSheet> {
   late final List<int> _order = [...widget.order];
   late int _selected = widget.selected;
 
-  void _done() =>
-      Navigator.pop(context, (order: _order, selected: _selected));
+  void _done() => Navigator.pop(context, (order: _order, selected: _selected));
 
   @override
   Widget build(BuildContext context) => SafeArea(

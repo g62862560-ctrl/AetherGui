@@ -10,7 +10,9 @@ sealed class CoreSettingsForm : Form
     private readonly ComboBox _testUrl = new() { DropDownStyle = ComboBoxStyle.DropDown, Width = 420, Text = Aether.TestUrl, AccessibleName = "Delay test URL" };
     private readonly CheckBox _realDelayTest = new() { Text = "Verify connection and measure delay with a real web request", AutoSize = true, Checked = Aether.RealDelayTest, AccessibleName = "Real delay test" };
     private readonly IReadOnlyDictionary<int, int> _connectMs;
-    private readonly CheckedListBox _order = new() { Dock = DockStyle.Fill, CheckOnClick = true, IntegralHeight = false, DisplayMember = nameof(Preset.Label), AccessibleName = "Auto protocol order", AllowDrop = true };
+    private readonly IReadOnlyDictionary<int, ProtocolStat> _stats;
+    // Drawn by hand so each row can show how the protocol did next to its name.
+    private readonly CheckedListBox _order = new() { Dock = DockStyle.Fill, CheckOnClick = true, IntegralHeight = false, DisplayMember = nameof(Preset.Label), AccessibleName = "Auto protocol order", AllowDrop = true, DrawMode = DrawMode.OwnerDrawFixed };
     private readonly int[] _menuOrder;
     private int[] _checkedOrder = [];
     public int[] MenuOrder { get; private set; } = [];
@@ -24,9 +26,10 @@ sealed class CoreSettingsForm : Form
         WordWrap = false, Dock = DockStyle.Fill, Font = new Font("Courier New", 9F)
     };
 
-    public CoreSettingsForm(CoreOptions options, IReadOnlyDictionary<int, int>? connectMs = null, int[]? menuOrder = null)
+    public CoreSettingsForm(CoreOptions options, IReadOnlyDictionary<int, int>? connectMs = null, int[]? menuOrder = null, IReadOnlyDictionary<int, ProtocolStat>? stats = null)
     {
         Options = options;
+        _stats = stats ?? new Dictionary<int, ProtocolStat>();
         _connectMs = connectMs ?? new Dictionary<int, int>();
         _checkedOrder = Aether.SavedOrder is { Length: > 0 } saved
             ? saved : Aether.AutoOrder(_connectMs).Select(p => Array.IndexOf(Aether.Presets, p)).ToArray();
@@ -116,6 +119,8 @@ sealed class CoreSettingsForm : Form
     private TableLayoutPanel OrderLayout()
     {
         FillOrder(_menuOrder);
+        _order.ItemHeight = Font.Height + 8;
+        _order.DrawItem += DrawOrderItem;
         _order.MouseDown += OrderMouseDown;
         _order.MouseMove += OrderMouseMove;
         _order.DragEnter += (_, e) => e.Effect = e.Data?.GetDataPresent(typeof(int)) == true ? DragDropEffects.Move : DragDropEffects.None;
@@ -126,7 +131,8 @@ sealed class CoreSettingsForm : Form
         var note = new Label { AutoSize = true, Dock = DockStyle.Fill, Text =
             "Auto tries the checked protocols from the top. After each try the app moves that protocol by its speed " +
             "(to the bottom if it failed); your own moves stay otherwise. Drag a protocol to reorder. " +
-            "Reset order restores the speed ranking (only this list); then Save." };
+            "Reset order restores the speed ranking (only this list); then Save. " +
+            "Each row shows how the protocol did on this device: successful connects, failures, average connect time and when it last worked." };
 
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2 };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -136,6 +142,40 @@ sealed class CoreSettingsForm : Form
         layout.Controls.Add(note, 0, 0); layout.SetColumnSpan(note, 2);
         layout.Controls.Add(_order, 0, 1); layout.Controls.Add(resetOrder, 1, 1);
         return layout;
+    }
+
+    internal static string Ago(long epochSeconds)
+    {
+        var s = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - epochSeconds;
+        return s < 3600 ? $"{Math.Max(1, s / 60)}m ago" : s < 86400 ? $"{s / 3600}h ago" : $"{s / 86400}d ago";
+    }
+
+    // Name, then the verdict (the answer) in color, then the numbers behind it.
+    private void DrawOrderItem(object? sender, DrawItemEventArgs e)
+    {
+        e.DrawBackground();
+        if (e.Index < 0) return;
+        var preset = (Preset)_order.Items[e.Index];
+        var st = _stats.GetValueOrDefault(Array.IndexOf(Aether.Presets, preset)) ?? new ProtocolStat();
+        var state = _order.GetItemChecked(e.Index) ? System.Windows.Forms.VisualStyles.CheckBoxState.CheckedNormal : System.Windows.Forms.VisualStyles.CheckBoxState.UncheckedNormal;
+        var glyph = CheckBoxRenderer.GetGlyphSize(e.Graphics, state);
+        CheckBoxRenderer.DrawCheckBox(e.Graphics, new Point(e.Bounds.X + 2, e.Bounds.Y + (e.Bounds.Height - glyph.Height) / 2), state);
+        var selected = (e.State & DrawItemState.Selected) != 0;
+        var (verdict, color) = st.Verdict switch
+        {
+            "good" => ("Works for you", Palette.Connected),
+            "bad" => ("Often fails", Palette.Disconnected),
+            "maybe" => ("Too few tries", Palette.Connecting),
+            _ => ("Not tried yet", Palette.MutedText)
+        };
+        var details = st.Tries == 0 ? "" : $"{st.Ok} ok · {st.Fail} failed"
+            + (st.Ok > 0 ? $" · avg {st.AvgMs / 1000.0:0.0}s" : "") + (st.LastOk > 0 ? $" · last ok {Ago(st.LastOk)}" : "");
+        const TextFormatFlags flags = TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
+        int x = e.Bounds.X + glyph.Width + 8, nameWidth = Math.Max(140, e.Bounds.Width * 2 / 5), verdictWidth = TextRenderer.MeasureText("Too few tries ", e.Font).Width;
+        TextRenderer.DrawText(e.Graphics, preset.Label, e.Font, new Rectangle(x, e.Bounds.Y, nameWidth, e.Bounds.Height), e.ForeColor, flags);
+        TextRenderer.DrawText(e.Graphics, verdict, e.Font, new Rectangle(x + nameWidth, e.Bounds.Y, verdictWidth, e.Bounds.Height), selected ? e.ForeColor : color, flags);
+        TextRenderer.DrawText(e.Graphics, details, e.Font, Rectangle.FromLTRB(x + nameWidth + verdictWidth, e.Bounds.Top, e.Bounds.Right, e.Bounds.Bottom), selected ? e.ForeColor : Palette.MutedText, flags);
+        e.DrawFocusRectangle();
     }
 
     private void OrderMouseDown(object? sender, MouseEventArgs e)

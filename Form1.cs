@@ -17,12 +17,12 @@ public partial class Form1 : Form
     private int[] _protocolIndexes = [-1, .. Aether.MenuPresetIndexes];
     private static readonly string[] ScanModes = ["turbo", "balanced"]; // saved as an index into this
     private Dictionary<int, int> _connectMs = []; // preset index -> ms its last connect took, -1 = failed; orders Auto
+    private Dictionary<int, ProtocolStat> _stats = []; // per-protocol history, shown in Core settings > Auto order
 
     public Form1()
     {
         InitializeComponent();
         cboScan.Items.AddRange(["Fast: first server that answers", "Balanced: tries a few, keeps the fastest"]);
-        var savedProtocol = 0;
         string? savedMenuText = null;
         using (var key = Registry.CurrentUser.OpenSubKey(SettingsKey))
         {
@@ -30,7 +30,7 @@ public partial class Form1 : Form
             chkSysProxy.Checked = key?.GetValue("SetSystemProxy") is 1;
             chkPsiphon.Checked = key?.GetValue("RunPsiphon") is not 0; // on unless turned off, as before this option
             chkShowLog.Checked = key?.GetValue("ShowActivity") is not 0; // on unless turned off
-            savedProtocol = key?.GetValue("Protocol") is int i && i >= 0 && i <= Aether.Presets.Length ? i : 0;
+            _stats = Aether.ParseStats(key?.GetValue("Stats") as string);
             savedMenuText = key?.GetValue("MenuOrder") as string;
             cboScan.SelectedIndex = key?.GetValue("Scan") is 1 ? 1 : 0;
             numTrySeconds.Value = key?.GetValue("TrySeconds") is int seconds && seconds >= numTrySeconds.Minimum && seconds <= numTrySeconds.Maximum
@@ -47,12 +47,8 @@ public partial class Form1 : Form
         var menuOrder = savedMenu.Length == Aether.Presets.Length
             ? savedMenu : [.. autoOrder, .. Aether.MenuPresetIndexes.Except(autoOrder)];
         _protocolIndexes = [-1, .. menuOrder];
-        cboProtocol.Items.Add("Auto (order in Core settings)");
-        cboProtocol.Items.AddRange(_protocolIndexes.Skip(1).Select(i => (object)Aether.Presets[i].Label).ToArray());
-        cboProtocol.SelectedIndex = Math.Max(0, Array.IndexOf(_protocolIndexes, savedProtocol - 1));
         try { _coreOptions = CoreOptions.Load(); }
         catch { chkStartup.Checked = false; Log("Could not load core settings. Review settings before connecting."); }
-        cboProtocol.SelectedIndexChanged += (_, _) => SaveSetting("Protocol", _protocolIndexes[cboProtocol.SelectedIndex] + 1);
         cboScan.SelectedIndexChanged += (_, _) => SaveSetting("Scan", cboScan.SelectedIndex);
         numTrySeconds.ValueChanged += (_, _) => SaveSetting("TrySeconds", (int)numTrySeconds.Value);
         chkStartup.CheckedChanged += (_, _) => SaveSetting("AutoConnect", chkStartup.Checked);
@@ -88,21 +84,6 @@ public partial class Form1 : Form
         FormClosing += (_, _) => { _buttonTimer.Dispose(); _cts?.Cancel(); KillProcess(); Psiphon.Kill(); SystemProxy.Disable(); };
     }
 
-    private static readonly Bitmap PsiphonIcon = new(typeof(Form1).Assembly.GetManifestResourceStream("psiphon.png")!);
-
-    // Psiphon presets get Psiphon's logo; every item is indented the same so the names line up.
-    private void DrawProtocolItem(object? sender, DrawItemEventArgs e)
-    {
-        e.DrawBackground();
-        if (e.Index < 0) return;
-        var text = cboProtocol.GetItemText(cboProtocol.Items[e.Index]) ?? "";
-        int size = e.Bounds.Height - 2, x = e.Bounds.X + 2;
-        if (text.Contains("Psiphon")) e.Graphics.DrawImage(PsiphonIcon, x, e.Bounds.Y + 1, size, size);
-        var textBounds = Rectangle.FromLTRB(x + size + 4, e.Bounds.Top, e.Bounds.Right, e.Bounds.Bottom);
-        TextRenderer.DrawText(e.Graphics, text, e.Font, textBounds, e.ForeColor, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
-        e.DrawFocusRectangle();
-    }
-
     // The log fills the empty space under the controls; showing it does not resize the window.
     private void ShowLog(bool show) => txtMiniLog.Visible = show;
 
@@ -119,20 +100,32 @@ public partial class Form1 : Form
         if (_cts != null) { _cts.Cancel(); return; }
         _cts = new CancellationTokenSource();
         StartWatchdog();
-        btnConnect.Text = "Disconnect";
+        btnConnect.Text = "✕\nDisconnect";
         btnConnect.AccessibleName = "Disconnect";
-        btnCoreSettings.Enabled = cboProtocol.Enabled = cboScan.Enabled = numTrySeconds.Enabled = btnUpdates.Enabled = false;
+        btnCoreSettings.Enabled = btnReset.Enabled = cboScan.Enabled = numTrySeconds.Enabled = btnUpdates.Enabled = false;
         btnNextProtocol.Enabled = true;
         btnCoreInput.Enabled = true;
         await RunAsync(_cts.Token);
         _cts.Dispose();
         _cts = null;
         if (IsDisposed) return;
-        btnCoreSettings.Enabled = cboProtocol.Enabled = cboScan.Enabled = numTrySeconds.Enabled = btnUpdates.Enabled = true;
+        btnCoreSettings.Enabled = btnReset.Enabled = cboScan.Enabled = numTrySeconds.Enabled = btnUpdates.Enabled = true;
         btnNextProtocol.Enabled = false;
         btnCoreInput.Enabled = false;
-        btnConnect.Text = "Connect securely";
+        btnConnect.Text = "⏻\nConnect";
         btnConnect.AccessibleName = "Connect securely";
+    }
+
+    // Forget the learned speeds and the saved order, go back to Auto, then connect.
+    private void btnReset_Click(object? sender, EventArgs e)
+    {
+        if (_cts != null) return;
+        _connectMs.Clear();
+        Aether.SavedOrder = [];
+        var auto = Aether.AutoOrder(_connectMs).Select(p => Array.IndexOf(Aether.Presets, p)).ToArray();
+        RefreshProtocolMenu([.. auto, .. Aether.MenuPresetIndexes.Except(auto)]);
+        SaveSetting("ConnectMs", "");
+        btnConnect_Click(null, EventArgs.Empty);
     }
 
     private void btnNextProtocol_Click(object? sender, EventArgs e)
@@ -147,7 +140,7 @@ public partial class Form1 : Form
     private async Task RunAsync(CancellationToken ct)
     {
         var untried = new List<Preset>();
-        var chosen = _protocolIndexes[cboProtocol.SelectedIndex]; // -1 = Auto; read once, a new pick applies on the next Connect
+        var chosen = -1; // always Auto now; the order is edited in Core settings > Auto order
         var scan = ScanModes[cboScan.SelectedIndex];
         var trySeconds = (int)numTrySeconds.Value;
         try
@@ -209,6 +202,12 @@ public partial class Form1 : Form
         var (connected, ms) = await Aether.WaitConnectedAsync(proc, startupSeconds, ct, realDelayTest);
         _connectMs[Array.IndexOf(Aether.Presets, p)] = connected ? (int)took.ElapsedMilliseconds : -1;
         SaveSetting("ConnectMs", Aether.FormatConnectMs(_connectMs));
+        var index = Array.IndexOf(Aether.Presets, p);
+        var stat = _stats.GetValueOrDefault(index) ?? new ProtocolStat();
+        _stats[index] = connected
+            ? stat with { Ok = stat.Ok + 1, TotalMs = stat.TotalMs + took.ElapsedMilliseconds, LastOk = DateTimeOffset.UtcNow.ToUnixTimeSeconds() }
+            : stat with { Fail = stat.Fail + 1 };
+        SaveSetting("Stats", Aether.FormatStats(_stats));
         var order = Aether.AutoOrder(_connectMs, Aether.SavedOrder).Select(x => Array.IndexOf(Aether.Presets, x)).ToArray();
         Aether.SavedOrder = Aether.Rerank(order, _connectMs, Array.IndexOf(Aether.Presets, p));
         if (!connected)
@@ -294,7 +293,7 @@ public partial class Form1 : Form
     private void ShowCoreSettings()
     {
         if (_cts != null) return;
-        using var dialog = new CoreSettingsForm(_coreOptions, _connectMs, _protocolIndexes.Skip(1).ToArray());
+        using var dialog = new CoreSettingsForm(_coreOptions, _connectMs, _protocolIndexes.Skip(1).ToArray(), _stats);
         if (dialog.ShowDialog(this) == DialogResult.OK)
         {
             _coreOptions = dialog.Options;
@@ -305,15 +304,9 @@ public partial class Form1 : Form
     // Keep the main list in the same order the user set in Core settings > Auto order.
     private void RefreshProtocolMenu(int[]? menuOrder = null)
     {
-        var selected = cboProtocol.SelectedIndex >= 0 && cboProtocol.SelectedIndex < _protocolIndexes.Length
-            ? _protocolIndexes[cboProtocol.SelectedIndex] : -1;
         var order = (menuOrder ?? _protocolIndexes.Skip(1).ToArray()).Where(i => i >= 0 && i < Aether.Presets.Length).Distinct().ToList();
         order.AddRange(Aether.MenuPresetIndexes.Except(order));
         _protocolIndexes = [-1, .. order];
-        cboProtocol.Items.Clear();
-        cboProtocol.Items.Add("Auto (order in Core settings)");
-        cboProtocol.Items.AddRange(_protocolIndexes.Skip(1).Select(i => (object)Aether.Presets[i].Label).ToArray());
-        cboProtocol.SelectedIndex = Math.Max(0, Array.IndexOf(_protocolIndexes, selected));
         SaveSetting("MenuOrder", string.Join(",", order));
     }
 

@@ -7,6 +7,19 @@ using System.Text;
 
 namespace AetherGui;
 
+// How one protocol has done on this device: connects that worked, tries that failed, speed and recency (LastOk: epoch seconds, 0 = never).
+record ProtocolStat(int Ok = 0, int Fail = 0, long TotalMs = 0, long LastOk = 0)
+{
+    public int Tries => Ok + Fail;
+    public long AvgMs => Ok == 0 ? 0 : TotalMs / Ok;
+
+    // Good works for you, Bad mostly fails, Maybe has too few tries, New was never tried.
+    public string Verdict => Tries == 0 ? "new"
+        : Ok == 0 && Fail >= 2 ? "bad"
+        : Tries < 3 ? "maybe"
+        : Ok / (double)Tries >= 0.6 ? "good" : "bad";
+}
+
 record Preset(string Name, string Args, int StartupSecs = Aether.FastSecs, string HttpFlag = "--http-proxy", bool AutoByDefault = false)
 {
     public bool ManualOnly => StartupSecs > Aether.FastSecs && !AutoByDefault;
@@ -213,6 +226,21 @@ static class Aether
 
     public static string FormatConnectMs(IReadOnlyDictionary<int, int> connectMs) =>
         string.Join(",", connectMs.Select(kv => $"{kv.Key}:{kv.Value}"));
+
+    // Saved as "0:5:2:21000:1762850000;..." = preset:ok:fail:totalOkMs:lastOkEpochSeconds; bad entries are dropped.
+    public static Dictionary<int, ProtocolStat> ParseStats(string? text) =>
+        System.Text.RegularExpressions.Regex.Matches(text ?? "", @"(\d+):(\d+):(\d+):(\d+):(\d+)")
+            .Where(m => int.Parse(m.Groups[1].Value) < Presets.Length)
+            .GroupBy(m => int.Parse(m.Groups[1].Value))
+            .ToDictionary(g => g.Key, g =>
+            {
+                var m = g.Last();
+                return new ProtocolStat(int.Parse(m.Groups[2].Value), int.Parse(m.Groups[3].Value),
+                    long.Parse(m.Groups[4].Value), long.Parse(m.Groups[5].Value));
+            });
+
+    public static string FormatStats(IReadOnlyDictionary<int, ProtocolStat> stats) =>
+        string.Join(";", stats.Select(kv => $"{kv.Key}:{kv.Value.Ok}:{kv.Value.Fail}:{kv.Value.TotalMs}:{kv.Value.LastOk}"));
 
     // A real request through aether's SOCKS5 proxy measures the real delay.
     private static readonly HttpClient Http = new(new SocketsHttpHandler { Proxy = new WebProxy($"socks5://127.0.0.1:{SocksPort}") })

@@ -24,6 +24,23 @@ class Preset {
 
 typedef Log = void Function(String);
 
+// How one protocol has done on this device: connects that worked, tries that failed, speed and recency.
+class ProtocolStat {
+  ProtocolStat({this.ok = 0, this.fail = 0, this.totalMs = 0, this.lastOk = 0});
+  int ok, fail, totalMs, lastOk; // lastOk: epoch seconds, 0 = never
+
+  int get tries => ok + fail;
+  int get avgMs => ok == 0 ? 0 : totalMs ~/ ok;
+
+  // 'good' works for you, 'bad' mostly fails, 'maybe' too few tries, 'new' never tried.
+  String get verdict {
+    if (tries == 0) return 'new';
+    if (ok == 0 && fail >= 2) return 'bad';
+    if (tries < 3) return 'maybe';
+    return ok / tries >= 0.6 ? 'good' : 'bad';
+  }
+}
+
 class Cancelled implements Exception {}
 
 // Stand-in for CancellationToken: delays wake up early and throw once cancelled.
@@ -324,6 +341,27 @@ class Aether {
 
   static String formatConnectMs(Map<int, int> connectMs) =>
       connectMs.entries.map((e) => '${e.key}:${e.value}').join(',');
+
+  // Saved as "0:5:2:21000:1762850000;..." = preset:ok:fail:totalOkMs:lastOkEpochSeconds.
+  static Map<int, ProtocolStat> parseStats(String? s) => {
+    for (final m in RegExp(
+      r'(\d+):(\d+):(\d+):(\d+):(\d+)',
+    ).allMatches(s ?? ''))
+      if (int.parse(m.group(1)!) < presets.length)
+        int.parse(m.group(1)!): ProtocolStat(
+          ok: int.parse(m.group(2)!),
+          fail: int.parse(m.group(3)!),
+          totalMs: int.parse(m.group(4)!),
+          lastOk: int.parse(m.group(5)!),
+        ),
+  };
+
+  static String formatStats(Map<int, ProtocolStat> stats) => stats.entries
+      .map(
+        (e) =>
+            '${e.key}:${e.value.ok}:${e.value.fail}:${e.value.totalMs}:${e.value.lastOk}',
+      )
+      .join(';');
 
   static List<int>? parseVersion(String? s) {
     final m = RegExp(r'(\d+)\.(\d+)(?:\.(\d+))?').firstMatch(s ?? '');

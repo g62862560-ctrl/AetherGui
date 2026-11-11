@@ -144,6 +144,10 @@ static class Checks
         try { CoreOptions.Parse("[\"--gool-classic\"]", "{}", 300); }
         catch (FormatException) { classicRejected = true; }
         Check(classicRejected, "Classic gool cannot override selected protocol");
+        var stats = Aether.ParseStats("0:5:2:21000:1762850000;1:0:3:0:0;999:1:1:1:1");
+        Check(stats.Count == 2 && Aether.ParseStats(Aether.FormatStats(stats))[0].AvgMs == 4200
+            && stats[0].Verdict == "good" && stats[1].Verdict == "bad" && new ProtocolStat().Verdict == "new" && new ProtocolStat(1).Verdict == "maybe",
+            "Protocol stats round-trip and give a verdict");
         ApplicationConfiguration.Initialize();
         // Larger text stands in for 125-200% display scaling: the left panel must grow with it, never slide under the log.
         static IEnumerable<Control> All(Control c) => c.Controls.Cast<Control>().SelectMany(x => All(x).Prepend(x));
@@ -159,12 +163,17 @@ static class Checks
             main.Font = new Font(main.Font.FontFamily, 9f * scale);
             main.Size = main.MinimumSize;
             main.PerformLayout();
-            var connect = InForm(All(main).OfType<Button>().First(b => b.Text == "Connect securely"));
-            Check(InForm(main.Controls.Find("connectionPanel", true)[0]).Contains(connect), $"Connect button inside its panel at {scale:0.#}x text");
+            var buttons = new[] { "Connect securely", "Reset order and connect", "Next protocol" }
+                .Select(name => InForm(All(main).OfType<Button>().First(b => b.AccessibleName == name))).ToArray();
+            var panel = InForm(main.Controls.Find("connectionPanel", true)[0]);
+            Check(buttons.All(panel.Contains), $"Action buttons inside their panel at {scale:0.#}x text");
+            Check(buttons.All(b => Math.Abs(b.Width - buttons[0].Width) <= 2 && b.Height == buttons[0].Height && b.Top == buttons[0].Top),
+                $"Action buttons share one row, size and shape at {scale:0.#}x text ({string.Join(" | ", buttons)})");
         }
         {
             using var main = new Form1();
-            var next = All(main).OfType<Button>().First(b => b.Text == "Next protocol");
+            var next = All(main).OfType<Button>().First(b => b.AccessibleName == "Next protocol");
+            Check(!All(main).OfType<ComboBox>().Any(c => c.AccessibleName == "Connection protocol"), "The protocol list is gone from the main window");
             var seconds = All(main).OfType<NumericUpDown>().First(n => n.AccessibleName == "Auto protocol try seconds");
             Check(!next.Enabled && seconds.Minimum == 5 && seconds.Maximum == 3600
                 && seconds.Value >= seconds.Minimum && seconds.Value <= seconds.Maximum,
