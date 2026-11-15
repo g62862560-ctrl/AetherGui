@@ -10,7 +10,11 @@ class ProtocolOrderSheet extends StatefulWidget {
     super.key,
     required this.order,
     required this.selected,
+    this.onReorder,
   });
+
+  // Called on every drag so Settings' list follows at once, not only on Done.
+  final void Function(List<int>)? onReorder;
 
   final List<int> order;
   final int selected; // -1 = Auto
@@ -57,8 +61,10 @@ class _ProtocolOrderSheetState extends State<ProtocolOrderSheet> {
               padding: EdgeInsets.zero,
               buildDefaultDragHandles: false,
               itemCount: _order.length,
-              onReorderItem: (from, to) =>
-                  setState(() => _order.insert(to, _order.removeAt(from))),
+              onReorderItem: (from, to) => setState(() {
+                _order.insert(to, _order.removeAt(from));
+                widget.onReorder?.call([..._order]);
+              }),
               itemBuilder: (context, index) {
                 final i = _order[index];
                 final preset = Aether.presets[i];

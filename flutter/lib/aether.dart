@@ -257,6 +257,25 @@ class Aether {
   }
 
   static Future<void> vpnSettings() => _ch.invokeMethod('vpnSettings');
+  // [manufacturer, brand, sdk int, release] of this phone.
+  static Future<List<String>> deviceInfo() async =>
+      await _ch.invokeListMethod<String>('deviceInfo') ?? const [];
+  static Future<bool> batteryIgnored() async {
+    try {
+      return await _ch.invokeMethod<bool>('batteryIgnored') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // kind: battery | saver | app | oem. False = this phone has no such screen.
+  static Future<bool> openSetting(String kind) async {
+    try {
+      return await _ch.invokeMethod<bool>('openSetting', kind) ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
 
   // "v1.2.0" or "1.2.0+3" -> [1, 2, 0]; null if it is not a version.
   // Preferred Psiphon routes stay at the top of a fresh Auto order.

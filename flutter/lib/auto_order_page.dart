@@ -87,7 +87,10 @@ class AutoOrderPage extends StatefulWidget {
     required this.checked,
     required this.ranking,
     this.stats = const {},
+    this.onChanged,
   });
+  // Called on every edit so the main list follows at once, not only on Save.
+  final void Function(AutoOrderResult)? onChanged;
   final Map<int, ProtocolStat> stats; // how each protocol did on this device
   final List<int> order; // full main-list order
   final List<int> checked; // what Auto uses now
@@ -126,11 +129,20 @@ class _AutoOrderPageState extends State<AutoOrderPage> {
     ], auto);
   }
 
+  List<int> get _checked => [
+    for (final i in _items)
+      if (_on.contains(i)) i,
+  ];
+
+  void _notify() {
+    final checked = _checked;
+    if (checked.isNotEmpty) {
+      widget.onChanged?.call((order: [..._items], checked: checked));
+    }
+  }
+
   void _save() {
-    final checked = [
-      for (final i in _items)
-        if (_on.contains(i)) i,
-    ];
+    final checked = _checked;
     if (checked.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Check at least one protocol for Auto.')),
@@ -146,7 +158,10 @@ class _AutoOrderPageState extends State<AutoOrderPage> {
       title: const Text('Auto order'),
       actions: [
         TextButton(
-          onPressed: () => setState(_reset),
+          onPressed: () => setState(() {
+            _reset();
+            _notify();
+          }),
           child: const Text('Reset'),
         ),
         TextButton(onPressed: _save, child: const Text('Save')),
@@ -168,8 +183,10 @@ class _AutoOrderPageState extends State<AutoOrderPage> {
           child: ReorderableListView(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
             buildDefaultDragHandles: false,
-            onReorderItem: (from, to) =>
-                setState(() => _items.insert(to, _items.removeAt(from))),
+            onReorderItem: (from, to) => setState(() {
+              _items.insert(to, _items.removeAt(from));
+              _notify();
+            }),
             children: [
               for (final (index, i) in _items.indexed)
                 CheckboxListTile(
@@ -178,8 +195,10 @@ class _AutoOrderPageState extends State<AutoOrderPage> {
                   title: Text(Aether.presets[i].label),
                   subtitle: protocolStatLine(widget.stats[i] ?? ProtocolStat()),
                   value: _on.contains(i),
-                  onChanged: (v) =>
-                      setState(() => v == true ? _on.add(i) : _on.remove(i)),
+                  onChanged: (v) => setState(() {
+                    v == true ? _on.add(i) : _on.remove(i);
+                    _notify();
+                  }),
                   secondary: ReorderableDragStartListener(
                     index: index,
                     child: const Icon(Icons.drag_handle_rounded),

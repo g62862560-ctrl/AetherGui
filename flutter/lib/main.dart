@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'aether.dart';
+import 'battery_guide.dart';
 import 'auto_order_page.dart';
 import 'protocol_order_sheet.dart';
 import 'core_options.dart';
@@ -615,13 +616,18 @@ class _HomePageState extends State<HomePage> {
           checked: _order,
           ranking: _autoIndexes(),
           stats: _stats,
+          onChanged: _applyAutoOrder,
         ),
       ),
     );
     if (!mounted || result == null) return;
+    _applyAutoOrder(result);
+  }
+
+  void _applyAutoOrder(AutoOrderResult r) {
     setState(() {
-      _menuOrder = [...result.order];
-      _order = [...result.checked];
+      _menuOrder = [...r.order];
+      _order = [...r.checked];
     });
     _saveSettings();
   }
@@ -1148,17 +1154,26 @@ class _HomePageState extends State<HomePage> {
     final result = await showModalBottomSheet<ProtocolOrderResult>(
       context: context,
       isScrollControlled: true,
-      builder: (_) => ProtocolOrderSheet(order: _menuOrder, selected: _preset),
+      builder: (_) => ProtocolOrderSheet(
+        order: _menuOrder,
+        selected: _preset,
+        onReorder: _applyMenuOrder,
+      ),
     );
     if (!mounted || result == null) return;
+    setState(() => _preset = result.selected);
+    _applyMenuOrder(result.order);
+  }
+
+  // Main-list order edits: Auto's checked set keeps its members and follows the new order.
+  void _applyMenuOrder(List<int> order) {
     setState(() {
-      _menuOrder = [...result.order];
+      _menuOrder = [...order];
       final checked = _order.toSet();
       _order = [
         for (final i in _menuOrder)
           if (checked.contains(i)) i,
       ];
-      _preset = result.selected;
     });
     _saveSettings();
   }
@@ -1314,6 +1329,18 @@ class _HomePageState extends State<HomePage> {
             ),
             trailing: Icon(Icons.open_in_new_rounded, size: 20),
             onTap: Aether.vpnSettings,
+          ),
+          ListTile(
+            leading: const Icon(Icons.battery_saver_rounded),
+            title: const Text('Background running'),
+            subtitle: const Text(
+              'Step-by-step guide for your phone to keep the VPN running with the screen off',
+            ),
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const BatteryGuidePage()),
+            ),
           ),
         ],
       ),

@@ -332,6 +332,7 @@ public partial class Form1 : Form
     {
         if (_cts != null) return;
         using var dialog = new CoreSettingsForm(_coreOptions, _connectMs, _protocolIndexes.Skip(1).ToArray(), _stats);
+        dialog.OrderChanged += (menu, auto) => { Aether.SavedOrder = auto; RefreshProtocolMenu(menu); };
         if (dialog.ShowDialog(this) == DialogResult.OK)
         {
             _coreOptions = dialog.Options;

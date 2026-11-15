@@ -135,6 +135,7 @@ sealed class CoreSettingsForm : Form
         _order.DragEnter += (_, e) => e.Effect = e.Data?.GetDataPresent(typeof(int)) == true ? DragDropEffects.Move : DragDropEffects.None;
         _order.DragOver += (_, e) => e.Effect = e.Data?.GetDataPresent(typeof(int)) == true ? DragDropEffects.Move : DragDropEffects.None;
         _order.DragDrop += OrderDragDrop;
+        _order.ItemCheck += (_, _) => { if (IsHandleCreated) BeginInvoke(NotifyOrder); }; // fires before the new state is set
         var resetOrder = new Button { Text = "Reset order", AutoSize = true, AccessibleName = "Reset Auto order to the speed ranking" };
         resetOrder.Click += (_, _) => ResetOrder();
         var note = new Label { AutoSize = true, Dock = DockStyle.Fill, Text =
@@ -237,12 +238,24 @@ sealed class CoreSettingsForm : Form
         _order.Items.Insert(to, item);
         _order.SetItemChecked(to, on);
         _order.SelectedIndex = to;
+        NotifyOrder();
     }
 
     private void ResetOrder()
     {
         _checkedOrder = Aether.AutoOrder(_connectMs).Select(p => Array.IndexOf(Aether.Presets, p)).ToArray();
         FillOrder([.. _checkedOrder, .. Aether.MenuPresetIndexes.Except(_checkedOrder)]);
+        NotifyOrder();
+    }
+
+    // Raised on every edit so the main window's list follows at once, not only on Save.
+    public event Action<int[], int[]>? OrderChanged;
+
+    private void NotifyOrder()
+    {
+        var checkedOrder = _order.CheckedItems.Cast<Preset>().Select(p => Array.IndexOf(Aether.Presets, p)).ToArray();
+        if (checkedOrder.Length == 0) return; // Auto needs at least one; Save explains
+        OrderChanged?.Invoke(_order.Items.Cast<Preset>().Select(p => Array.IndexOf(Aether.Presets, p)).ToArray(), checkedOrder);
     }
 
     private void FillOrder(int[] fullOrder)
