@@ -21,12 +21,13 @@ sed -i "s/^version: [0-9.]*+[0-9]*/version: $v+$((build + 1))/" flutter/pubspec.
 sed -i -E "s/(AetherGui-|v)[0-9]+\.[0-9]+\.[0-9]+([-<\/])/\1$v\2/g" docs/index.html # landing page version and download links
 
 dotnet run --project tests/CoreChecks.csproj
+./fetch_tun2socks.sh
 dotnet publish AetherGui.csproj -c Release -o publish
 (cd flutter && flutter test && flutter build apk --release --split-per-abi)
 
 # Only what the app needs: never identity files (*.toml hold private keys) or anything else left in publish/.
 out=release-out; rm -rf "$out"; mkdir -p "$out/AetherGui"
-cp -r publish/AetherGui.exe publish/aether.exe publish/pt publish/LICENSES "$out/AetherGui/"
+cp -r publish/AetherGui.exe publish/aether.exe publish/pt publish/tun2socks publish/LICENSES "$out/AetherGui/"
 (cd "$out" && python -I -m zipfile -c "AetherGui-$v-windows-x64.zip" AetherGui)
 for f in flutter/build/app/outputs/flutter-apk/app-*-release.apk; do # one APK per CPU: arm64-v8a, armeabi-v7a, x86_64
   a=${f##*/app-}; cp "$f" "$out/AetherGui-$v-android-${a%-release.apk}.apk"

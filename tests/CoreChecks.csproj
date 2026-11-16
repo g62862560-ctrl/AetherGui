@@ -13,6 +13,7 @@
     <Compile Include="..\Form1.cs" Link="Form1.cs" />
     <Compile Include="..\Form1.Designer.cs" Link="Form1.Designer.cs" />
     <Compile Include="..\SystemProxy.cs" Link="SystemProxy.cs" />
+    <Compile Include="..\TunMode.cs" Link="TunMode.cs" />
     <Compile Include="..\MixedProxy.cs" Link="MixedProxy.cs" />
     <Compile Include="..\Psiphon.cs" Link="Psiphon.cs" />
     <EmbeddedResource Include="..\flutter\assets\psiphon.png" LogicalName="psiphon.png" />

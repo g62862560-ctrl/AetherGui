@@ -19,7 +19,7 @@
     <Compile Remove="tests\**\*.cs" />
     <!-- aether.exe, its identity files and pt/ (tor bridge transports) ship beside AetherGui.exe -->
     <None Include="aether.exe;aether.toml;aether-masque.toml" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
-    <None Include="pt\**;LICENSES\**" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <None Include="pt\**;LICENSES\**;tun2socks\**" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <EmbeddedResource Include="flutter/assets/psiphon.png" LogicalName="psiphon.png" />
   </ItemGroup>
 </Project>

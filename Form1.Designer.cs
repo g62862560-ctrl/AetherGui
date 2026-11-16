@@ -34,6 +34,7 @@ partial class Form1
     private RichTextBox txtMiniLog = null!;
     private ToolStripMenuItem chkStartup = null!;
     private CheckBox chkSysProxy = null!;
+    private CheckBox chkTun = null!;
     private CheckBox chkShowLog = null!;
     private ToolStripMenuItem chkPsiphon = null!;
     private ProgressBar prgConnecting = null!;
@@ -168,9 +169,9 @@ partial class Form1
         statAvg = StatCard(statCards, "Avg time", 2);
         statTries = StatCard(statCards, "Tries", 3);
 
-        var controlLayout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 11, Margin = Padding.Empty };
+        var controlLayout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 12, Margin = Padding.Empty };
         controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); // fit the panel, never the content
-        for (var i = 0; i < 11; i++) controlLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        for (var i = 0; i < 12; i++) controlLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         // The buttons sit right under the status so they stay in view; the rest scrolls if large text needs more room.
         controlLayout.Controls.Add(status, 0, 0);
         controlLayout.Controls.Add(prgConnecting, 0, 1);
@@ -182,8 +183,10 @@ partial class Form1
         controlLayout.Controls.Add(lblScan, 0, 7);
         controlLayout.Controls.Add(cboScan, 0, 8);
         controlLayout.Controls.Add(chkSysProxy, 0, 9);
+        chkTun = new CheckBox { Text = "TUN mode: all apps (needs admin)", AutoSize = true, Margin = new Padding(0, 4, 0, 0), AccessibleName = "Full-device TUN mode" };
+        controlLayout.Controls.Add(chkTun, 0, 10);
         chkShowLog = new CheckBox { Text = "Show latest activity", AutoSize = true, Margin = new Padding(0, 4, 0, 2) };
-        controlLayout.Controls.Add(chkShowLog, 0, 10);
+        controlLayout.Controls.Add(chkShowLog, 0, 11);
 
         // Small sunken log of the latest lines that fills the space left under the controls.
         txtMiniLog = new RichTextBox
@@ -205,12 +208,13 @@ partial class Form1
         shell.Controls.Add(connectionCard, 0, 0);
 
         Text = "Aether — Private network client";
+        AutoScaleDimensions = new SizeF(96F, 96F); // without this, AutoScaleMode.Dpi does nothing and text renders tiny on high-DPI screens
         AutoScaleMode = AutoScaleMode.Dpi;
         BackColor = Palette.Background;
-        Size = new Size(420, 600);
+        Size = new Size(520, 720);
         FormBorderStyle = FormBorderStyle.FixedSingle; // size is locked; only Show latest activity changes the height
         MaximizeBox = false;
-        MinimumSize = new Size(380, 420); // sized for the hidden log; ShowLog grows it
+        MinimumSize = new Size(460, 540); // sized for the hidden log; ShowLog grows it
         StartPosition = FormStartPosition.CenterScreen;
         KeyPreview = true;
         // Docked controls lay out last-added first: the menu takes the top, then the shell fills the rest.

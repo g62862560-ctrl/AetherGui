@@ -15,6 +15,7 @@ static class SystemProxy
 
     private static readonly string AetherExe = Path.Combine(AppContext.BaseDirectory, "aether.exe").Replace("'", "''");
     private static readonly string PsiphonExe = Psiphon.Exe.Replace("'", "''");
+    private static readonly string TunExe = Path.Combine(AppContext.BaseDirectory, "tun2socks", "tun2socks.exe").Replace("'", "''");
 
     [DllImport("wininet.dll")]
     private static extern bool InternetSetOption(IntPtr h, int option, IntPtr buf, int len);
@@ -28,6 +29,7 @@ static class SystemProxy
 Wait-Process -Id {pid} -ErrorAction SilentlyContinue
 Get-Process aether -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq '{AetherExe}' }} | Stop-Process -Force
 Get-Process psiphon3 -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq '{PsiphonExe}' }} | Stop-Process -Force
+Get-Process tun2socks -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq '{TunExe}' }} | Stop-Process -Force
 Start-Sleep -Milliseconds 500
 $k = 'HKCU:\{KeyPath}'
 $port = (Get-ItemProperty 'HKCU:\Software\AetherGui' -ErrorAction SilentlyContinue).ProxyPort

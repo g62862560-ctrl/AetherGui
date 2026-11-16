@@ -179,6 +179,7 @@ static class Checks
             using var main = new Form1();
             var next = All(main).OfType<Button>().First(b => b.AccessibleName == "Next protocol");
             Check(All(main).OfType<ComboBox>().Any(c => c.AccessibleName == "Connection protocol"), "The protocol list is on the main window");
+            Check(All(main).OfType<CheckBox>().Any(c => c.AccessibleName == "Full-device TUN mode"), "The full-device TUN toggle is on the main window");
             var seconds = All(main).OfType<NumericUpDown>().First(n => n.AccessibleName == "Auto protocol try seconds");
             Check(!next.Enabled && seconds.Minimum == 5 && seconds.Maximum == 3600
                 && seconds.Value >= seconds.Minimum && seconds.Value <= seconds.Maximum,

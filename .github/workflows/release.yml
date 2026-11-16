@@ -141,13 +141,15 @@ jobs:
 
       - run: dotnet run --project tests/CoreChecks.csproj
 
+      - run: bash fetch_tun2socks.sh
+
       - run: dotnet publish AetherGui.csproj -c Release -o publish
 
       # Only what the app needs: never identity files or anything else left in publish/.
       - name: Pack
         run: |
           mkdir -p out/AetherGui
-          cp -r publish/AetherGui.exe publish/aether.exe publish/pt publish/LICENSES out/AetherGui/
+          cp -r publish/AetherGui.exe publish/aether.exe publish/pt publish/tun2socks publish/LICENSES out/AetherGui/
           cd out && python -I -m zipfile -c "AetherGui-$VERSION-windows-x64.zip" AetherGui
 
       - uses: actions/upload-artifact@v4

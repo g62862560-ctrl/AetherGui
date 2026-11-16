@@ -13,6 +13,7 @@ public partial class Form1 : Form
     private CancellationTokenSource? _cts;
     private CancellationTokenSource? _attemptCts;
     private bool _nextRequested;
+    private bool _tunPrompting;
     private CoreOptions _coreOptions = new();
     private int[] _protocolIndexes = [-1, .. Aether.MenuPresetIndexes];
     private static readonly string[] ScanModes = ["turbo", "balanced"]; // saved as an index into this
@@ -28,7 +29,14 @@ public partial class Form1 : Form
         using (var key = Registry.CurrentUser.OpenSubKey(SettingsKey))
         {
             chkStartup.Checked = key?.GetValue("AutoConnect") is 1;
-            chkSysProxy.Checked = key?.GetValue("SetSystemProxy") is 1;
+            chkSysProxy.Checked = key?.GetValue("SetSystemProxy") is not 0; // on unless the user turns it off
+            chkTun.Checked = key?.GetValue("TunMode") is 1 && TunMode.Available && TunMode.IsAdmin;
+            if (!TunMode.Available)
+            {
+                chkTun.Enabled = false;
+                chkTun.AccessibleDescription = "tun2socks.exe / wintun.dll not found beside the app.";
+            }
+            else chkTun.AccessibleDescription = "Needs administrator: Aether asks for elevation and reconnects when you turn this on.";
             chkPsiphon.Checked = key?.GetValue("RunPsiphon") is not 0; // on unless turned off, as before this option
             chkShowLog.Checked = key?.GetValue("ShowActivity") is not 0; // on unless turned off
             savedProtocol = key?.GetValue("Protocol") is int i && i >= 0 && i <= Aether.Presets.Length ? i : 0;
@@ -71,6 +79,14 @@ public partial class Form1 : Form
             if (!chkSysProxy.Checked) SystemProxy.Disable();
             else if (_process is { HasExited: false } && lblStatus.Text.Contains("Connected:")) SystemProxy.Enable();
         };
+        chkTun.CheckedChanged += (_, _) =>
+        {
+            if (_tunPrompting) return;
+            TunMode.Enabled = chkTun.Checked;
+            if (!chkTun.Checked) { TunMode.Disable(); return; }
+            if (!TunMode.IsAdmin) { _tunPrompting = true; try { PromptTunElevation(); } finally { _tunPrompting = false; } return; }
+            if (_cts is not null && lblStatus.Text.Contains("Connected:")) TunMode.Enable(Aether.ProxyPort, Log);
+        };
         chkPsiphon.CheckedChanged += (_, _) =>
         {
             SaveSetting("RunPsiphon", chkPsiphon.Checked);
@@ -82,13 +98,21 @@ public partial class Form1 : Form
         Shown += async (_, _) =>
         {
             _ = CheckUpdatesAsync(interactive: false);
+            // Restarted as admin for TUN: resume the connection the user had running.
+            if (TunMode.ElevatedForTun)
+            {
+                Log("Administrator rights granted; reconnecting to start the TUN.");
+                await Task.Delay(StartupDelayMs);
+                if (_cts == null && btnConnect.Enabled) btnConnect_Click(null, EventArgs.Empty);
+                return;
+            }
             if (!chkStartup.Checked) return;
             Log($"Auto-connecting in {StartupDelayMs / 1000}s...");
             await Task.Delay(StartupDelayMs);
             if (chkStartup.Checked && _cts == null && btnConnect.Enabled) btnConnect_Click(null, EventArgs.Empty); // not while a core update installs
         };
         _buttonTimer.Tick += (_, _) => btnConnect.BackColor = LightColorAt(_buttonClock.Elapsed.TotalSeconds / 4);
-        FormClosing += (_, _) => { _buttonTimer.Dispose(); _cts?.Cancel(); KillProcess(); Psiphon.Kill(); SystemProxy.Disable(); };
+        FormClosing += (_, _) => { _buttonTimer.Dispose(); _cts?.Cancel(); TunMode.Disable(); KillProcess(); Psiphon.Kill(); SystemProxy.Disable(); };
     }
 
     private static readonly Bitmap PsiphonIcon = new(typeof(Form1).Assembly.GetManifestResourceStream("psiphon.png")!);
@@ -245,6 +269,7 @@ public partial class Form1 : Form
         }
 
         if (chkSysProxy.Checked) SystemProxy.Enable();
+        if (chkTun.Checked) TunMode.Enable(Aether.ProxyPort, Log);
         SetStatus($"Connected: {p.Name}", Palette.Connected);
         var (verdict, verdictColor) = CoreSettingsForm.Verdict(_stats[index]);
         var st = _stats[index];
@@ -322,10 +347,23 @@ public partial class Form1 : Form
 
     private void KillProcess()
     {
+        TunMode.Disable(); // drop the TUN default route before the proxy it points at dies
         SystemProxy.Disable(); // never leave the system pointing at a dead proxy
         try { if (_process is { HasExited: false }) { _process.Kill(true); _process.WaitForExit(2000); } } catch { }
         _process?.Dispose();
         _process = null;
+    }
+
+    // TUN needs elevation, so ask once and come back as administrator to resume the connection.
+    private void PromptTunElevation()
+    {
+        chkTun.Checked = false; // stays off here; the elevated copy reads the saved setting
+        if (MessageBox.Show(this, "TUN mode needs administrator rights.\n\nRestart Aether as administrator and reconnect?", "TUN mode",
+            MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) { SaveSetting("TunMode", 0); return; }
+        SaveSetting("TunMode", 1);
+        try { Process.Start(new ProcessStartInfo(Environment.ProcessPath!, "--tun") { UseShellExecute = true, Verb = "runas" }); }
+        catch { SaveSetting("TunMode", 0); return; } // UAC declined
+        Application.Exit();
     }
 
     private void ShowCoreSettings()
@@ -409,6 +447,7 @@ public partial class Form1 : Form
         {
             Text = "Core input", ClientSize = new Size(440, 140), MinimumSize = new Size(360, 180),
             StartPosition = FormStartPosition.CenterParent, AutoScaleMode = AutoScaleMode.Dpi,
+            AutoScaleDimensions = new SizeF(96F, 96F),
             Font = Font, BackColor = Palette.Background
         };
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), RowCount = 3, ColumnCount = 1 };
@@ -436,6 +475,7 @@ public partial class Form1 : Form
         var head = Color.Blue; Color? info = null; var tip = Color.DarkOrange;
         Log("=== Proxy info ===", head);
         Log($"System proxy: {SystemProxy.Status()}", info);
+        Log($"TUN mode: {(chkTun.Checked ? "on" : "off")}{(TunMode.Available ? "" : " (tun2socks missing)")}{(TunMode.IsAdmin ? "" : " (not admin)")}", info);
         Log($"Proxy {Aether.ProxyPort} (HTTP + SOCKS5, system proxy) | core: SOCKS5 {Aether.SocksPort}, HTTP {Aether.CoreHttpPort}", info);
         Log($"aether.exe: {(_process is { HasExited: false } ? "running" : "stopped")} | {lblStatus.Text.TrimStart('●', ' ')} | {lblDelay.Text}", info);
         Log("Presets: " + string.Join(", ", Aether.Presets.Select(p => p.Name)), info);

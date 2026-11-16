@@ -49,6 +49,7 @@ sealed class CoreSettingsForm : Form
         // Same normal Windows look as the main window.
         Font = new Font("Segoe UI", 9F);
         BackColor = Palette.Background;
+        AutoScaleDimensions = new SizeF(96F, 96F); // scale controls and fonts with display DPI
         AutoScaleMode = AutoScaleMode.Dpi;
         ClientSize = new Size(800, 650);
         MinimumSize = new Size(520, 460);
