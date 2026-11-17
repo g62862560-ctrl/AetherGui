@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.NetworkInformation;
 using System.Security.Principal;
 using Microsoft.Win32;
 
@@ -45,17 +46,36 @@ static class TunMode
 
     private static Process? _proc;
 
-    // Interface and next hop of the active default route, captured before ours is added.
+    // Interface, next hop and metric of the active default route on a real adapter: another TUN
+    // (sing-box, a VPN) must not be mistaken for the physical one.
     private static (string Name, string Gateway)? PhysicalRoute()
     {
-        const string cmd = "$r = Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1; " +
-                           "if ($r) { $n = (Get-NetAdapter -InterfaceIndex $r.InterfaceIndex).Name; Write-Output ($n + '|' + $r.NextHop) }";
+        const string cmd =
+            "$r = Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric; " +
+            "foreach ($x in $r) { $a = Get-NetAdapter -InterfaceIndex $x.InterfaceIndex -ErrorAction SilentlyContinue; " +
+            "if (-not $a) { continue }; " +
+            "if ($a.InterfaceDescription -match 'Wintun' -or $a.Name -match 'tun') { continue }; " +
+            "Write-Output ($a.Name + '|' + $x.NextHop); break }";
         using var p = Process.Start(new ProcessStartInfo("powershell.exe", "-NoProfile -Command \"" + cmd + "\"")
         { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })!;
         var parts = p.StandardOutput.ReadToEnd().Trim().Split('|');
         p.WaitForExit();
         return parts.Length == 2 && parts[0].Length > 0 && parts[1] is not ("0.0.0.0" or "")
             ? (parts[0], parts[1]) : null;
+    }
+
+    private static bool AdapterUp() =>
+        NetworkInterface.GetAllNetworkInterfaces().Any(n => n.Name == Adapter && n.OperationalStatus == OperationalStatus.Up);
+
+    // Wintun never answers duplicate-address detection, so the address lingers Tentative for a moment;
+    // a route added before it turns Preferred is silently ignored.
+    private static bool AddressPreferred()
+    {
+        const string cmd = "Get-NetIPAddress -InterfaceAlias " + Adapter + " -AddressFamily IPv4 -ErrorAction SilentlyContinue | " +
+                           "Select-Object -First 1 -ExpandProperty AddressState";
+        using var p = Process.Start(new ProcessStartInfo("powershell.exe", "-NoProfile -Command \"" + cmd + "\"")
+        { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })!;
+        return p.StandardOutput.ReadToEnd().Trim() == "Preferred";
     }
 
     private static bool Netsh(string args, Action<string> log)
@@ -75,7 +95,7 @@ static class TunMode
         if (!Available) { log("TUN mode unavailable: tun2socks.exe / wintun.dll missing beside the app."); return; }
         if (!IsAdmin) { log("TUN mode needs 'Run as administrator'."); return; }
         var route = PhysicalRoute();
-        if (route is null) { log("TUN mode: no physical default route found."); return; }
+        if (route is null) { log("TUN mode: no physical default route found (another tunnel owns it)."); return; }
         _proc?.Dispose();
         try
         {
@@ -91,11 +111,19 @@ static class TunMode
         }
         catch (Exception ex) { log($"TUN start failed: {ex.Message}"); Disable(); return; }
 
+        for (var i = 0; i < 20 && _proc is { HasExited: false } && !AdapterUp(); i++) Thread.Sleep(250);
+        if (_proc.HasExited) { log($"TUN start failed: tun2socks exited ({_proc.ExitCode})."); _proc.Dispose(); _proc = null; return; }
+        if (!AdapterUp()) { log("TUN start failed: the Wintun adapter never came up."); Disable(); return; }
+
         if (!Netsh($"set address name=\"{Adapter}\" static {Ip} {Mask}", log)
             || !Netsh($"set dnsservers name=\"{Adapter}\" static {Dns} primary", log))
         { Disable(); return; }
+        Netsh($"set interface \"{Adapter}\" metric=1", log); // the effective cost is route + interface metric
+        for (var i = 0; i < 20 && !AddressPreferred(); i++) Thread.Sleep(250);
+        if (!AddressPreferred()) { log("TUN setup failed: the adapter address never became usable."); Disable(); return; }
         foreach (var prefix in Bypass)
             Netsh($"add route {prefix} \"{route.Value.Name}\" {route.Value.Gateway} metric=1", log);
+        // Well below the physical route's cost so the TUN wins without touching the other route.
         Netsh($"add route 0.0.0.0/0 \"{Adapter}\" {Ip} metric=1", log);
         log("TUN mode on: all apps route through aether (Cloudflare endpoints bypass the tunnel).");
     }
@@ -104,20 +132,25 @@ static class TunMode
     {
         var proc = _proc;
         _proc = null;
-        if (proc is null) return;
-        try { if (!proc.HasExited) { proc.Kill(true); proc.WaitForExit(2000); } } catch { }
-        proc.Dispose();
-        // Dropping the Wintun adapter removes the TUN default route with it. The Cloudflare bypass
-        // routes are non-persistent and simply send those IPs out the normal gateway anyway.
+        if (proc is not null)
+        {
+            try { if (!proc.HasExited) { proc.Kill(true); proc.WaitForExit(3000); } } catch { }
+            proc.Dispose();
+        }
+        Cleanup();
     }
 
-    // Crash cleanup: runs in the watchdog copy, which never has a live _proc reference.
+    // Crash cleanup: also runs in the watchdog copy, which never has a live _proc reference.
     public static void Cleanup()
     {
+        foreach (var p in Process.GetProcessesByName("tun2socks"))
+            try { if (p.MainModule?.FileName == Exe) { p.Kill(true); p.WaitForExit(3000); } } catch { }
+        if (!IsAdmin) return; // removing the route needs elevation
         try
         {
-            foreach (var p in Process.GetProcessesByName("tun2socks"))
-                try { if (p.MainModule?.FileName == Exe) p.Kill(true); } catch { }
+            using var n = Process.Start(new ProcessStartInfo("netsh.exe", $"interface ipv4 delete route 0.0.0.0/0 \"{Adapter}\" {Ip}")
+            { UseShellExecute = false, CreateNoWindow = true })!;
+            n.WaitForExit(3000);
         }
         catch { }
     }
