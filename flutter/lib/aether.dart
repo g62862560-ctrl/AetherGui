@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 
 import 'core_options.dart';
+import 'exit_info.dart';
 
 class Preset {
   final String name, args, httpFlag;
@@ -23,6 +24,7 @@ class Preset {
 }
 
 typedef Log = void Function(String);
+typedef ExitSink = void Function(ExitInfo exit);
 
 // How one protocol has done on this device: connects that worked, tries that failed, speed and recency.
 class ProtocolStat {
@@ -512,8 +514,24 @@ class Aether {
         .toList();
     final torExit = args.contains('--tor');
     final psiphonExit = args.contains('--psiphon');
+    final usesPsiphon = args.any(
+      (a) => const [
+        '--psiphon',
+        '--psiphon-only',
+        '--psiphon-reverse',
+      ].contains(a),
+    );
+    final region = CoreOptions.normalizePsiphonRegion(options.psiphonRegion);
     return [
-      ...args, ...options.arguments,
+      ...args,
+      // Expert overrides retain precedence, including explicit empty values.
+      if (usesPsiphon &&
+          region.isNotEmpty &&
+          !options.hasPsiphonRegionOverride) ...[
+        '--psiphon-region',
+        region,
+      ],
+      ...options.arguments,
       if (p.args.contains('--tor')) ...['--tor-pt', lyrebird],
       if (p.args.contains('--psiphon')) ...['--psiphon-bin', psiphon],
       // Forward modes have TWO listeners: the VPN and latency test must use
@@ -531,6 +549,7 @@ class Aether {
     Log log, [
     CoreOptions options = const CoreOptions(),
     String scan = 'turbo',
+    ExitSink? onExit,
   ]) async {
     try {
       final proc = await Process.start(
@@ -549,7 +568,11 @@ class Aether {
         // Prompts (including email OTP) may not end with a newline.
         s.transform(const Utf8Decoder(allowMalformed: true)).listen((chunk) {
           for (final line in chunk.split(RegExp(r'[\r\n]+'))) {
-            if (line.trim().isNotEmpty) log(line);
+            if (line.trim().isNotEmpty) {
+              final exit = parseExit(line);
+              if (exit != null) onExit?.call(exit);
+              log(line);
+            }
           }
         }, onError: (_) => log('Core output stream failed.'));
       }

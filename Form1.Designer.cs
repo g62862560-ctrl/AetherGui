@@ -25,7 +25,10 @@ partial class Form1
     private Label lblStatus = null!;
     private TableLayoutPanel statCards = null!; // shown only while connected
     private Label statPing = null!, statSuccess = null!, statAvg = null!, statTries = null!;
-    private ToolStripStatusLabel lblDelay = null!;
+    private PictureBox exitFlag = null!;
+    private Label exitText = null!;
+    private FlowLayoutPanel exitPanel = null!;
+    private ToolStripStatusLabel lblProxyInfo = null!;
     private Button btnReset = null!;
     private Label lblProtocol = null!;
     private ComboBox cboProtocol = null!;
@@ -126,9 +129,9 @@ partial class Form1
         // The connected protocol's history on this device; empty while not connected.
         lblStatus = new Label { Text = "●  Disconnected", ForeColor = Palette.Disconnected, AutoSize = true, Font = new Font("Segoe UI", 10F, FontStyle.Bold), Margin = new Padding(0, 0, 0, 0), AccessibleName = "Connection status: Disconnected" };
         // Status bar along the bottom, with a sunken pane; no sizing grip since the size is locked.
-        lblDelay = new ToolStripStatusLabel("Delay: -") { Spring = false, TextAlign = ContentAlignment.MiddleLeft, BorderSides = ToolStripStatusLabelBorderSides.All, BorderStyle = Border3DStyle.SunkenOuter };
+        lblProxyInfo = new ToolStripStatusLabel($"Local proxy: 127.0.0.1:{Aether.ProxyPort} (HTTP + SOCKS5)") { Spring = false, TextAlign = ContentAlignment.MiddleLeft, BorderSides = ToolStripStatusLabelBorderSides.All, BorderStyle = Border3DStyle.SunkenOuter, AccessibleName = "Local proxy information" };
         var statusBar = new StatusStrip { RenderMode = ToolStripRenderMode.System, BackColor = Palette.Background, SizingGrip = false };
-        statusBar.Items.Add(lblDelay);
+        statusBar.Items.Add(lblProxyInfo);
         statusBar.Items.Add(new ToolStripStatusLabel($"AetherGui {Aether.AppVersion}") { Spring = true, TextAlign = ContentAlignment.MiddleRight });
         // Tall enough to show the classic chunky blocks.
         prgConnecting = new ProgressBar
@@ -169,24 +172,32 @@ partial class Form1
         statAvg = StatCard(statCards, "Avg time", 2);
         statTries = StatCard(statCards, "Tries", 3);
 
-        var controlLayout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 12, Margin = Padding.Empty };
+        // Exit location: a flag image beside "Country · IP · latency · WARP", shown only while connected.
+        exitPanel = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = false, Margin = new Padding(3, 0, 3, 6), Visible = false, AccessibleName = "Exit location" };
+        exitFlag = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom, Size = new Size(22, 16), Margin = new Padding(0, 2, 4, 0) };
+        exitText = new Label { AutoSize = true, Text = "-", Margin = Padding.Empty, AccessibleName = "Exit location text" };
+        exitPanel.Controls.Add(exitFlag);
+        exitPanel.Controls.Add(exitText);
+
+        var controlLayout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 13, Margin = Padding.Empty };
         controlLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); // fit the panel, never the content
-        for (var i = 0; i < 12; i++) controlLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        for (var i = 0; i < 13; i++) controlLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         // The buttons sit right under the status so they stay in view; the rest scrolls if large text needs more room.
         controlLayout.Controls.Add(status, 0, 0);
         controlLayout.Controls.Add(prgConnecting, 0, 1);
         controlLayout.Controls.Add(actionRow, 0, 2);
         controlLayout.Controls.Add(statCards, 0, 3);
-        controlLayout.Controls.Add(tryRow, 0, 4);
-        controlLayout.Controls.Add(lblProtocol, 0, 5);
-        controlLayout.Controls.Add(cboProtocol, 0, 6);
-        controlLayout.Controls.Add(lblScan, 0, 7);
-        controlLayout.Controls.Add(cboScan, 0, 8);
-        controlLayout.Controls.Add(chkSysProxy, 0, 9);
+        controlLayout.Controls.Add(exitPanel, 0, 4);
+        controlLayout.Controls.Add(tryRow, 0, 5);
+        controlLayout.Controls.Add(lblProtocol, 0, 6);
+        controlLayout.Controls.Add(cboProtocol, 0, 7);
+        controlLayout.Controls.Add(lblScan, 0, 8);
+        controlLayout.Controls.Add(cboScan, 0, 9);
+        controlLayout.Controls.Add(chkSysProxy, 0, 10);
         chkTun = new CheckBox { Text = "TUN mode: all apps (needs admin)", AutoSize = true, Margin = new Padding(0, 4, 0, 0), AccessibleName = "Full-device TUN mode" };
-        controlLayout.Controls.Add(chkTun, 0, 10);
+        controlLayout.Controls.Add(chkTun, 0, 11);
         chkShowLog = new CheckBox { Text = "Show latest activity", AutoSize = true, Margin = new Padding(0, 4, 0, 2) };
-        controlLayout.Controls.Add(chkShowLog, 0, 11);
+        controlLayout.Controls.Add(chkShowLog, 0, 12);
 
         // Small sunken log of the latest lines that fills the space left under the controls.
         txtMiniLog = new RichTextBox

@@ -79,13 +79,17 @@ public partial class Form1 : Form
             if (!chkSysProxy.Checked) SystemProxy.Disable();
             else if (_process is { HasExited: false } && lblStatus.Text.Contains("Connected:")) SystemProxy.Enable();
         };
-        chkTun.CheckedChanged += (_, _) =>
+        chkTun.CheckedChanged += async (_, _) =>
         {
             if (_tunPrompting) return;
             TunMode.Enabled = chkTun.Checked;
             if (!chkTun.Checked) { TunMode.Disable(); return; }
             if (!TunMode.IsAdmin) { _tunPrompting = true; try { PromptTunElevation(); } finally { _tunPrompting = false; } return; }
-            if (_cts is not null && lblStatus.Text.Contains("Connected:")) TunMode.Enable(Aether.ProxyPort, Log);
+            if (_cts is not null && lblStatus.Text.Contains("Connected:"))
+            {
+                try { await StartTunAsync(_cts.Token); }
+                catch (OperationCanceledException) { }
+            }
         };
         chkPsiphon.CheckedChanged += (_, _) =>
         {
@@ -128,6 +132,14 @@ public partial class Form1 : Form
         var textBounds = Rectangle.FromLTRB(x + size + 4, e.Bounds.Top, e.Bounds.Right, e.Bounds.Bottom);
         TextRenderer.DrawText(e.Graphics, text, e.Font, textBounds, e.ForeColor, TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
         e.DrawFocusRectangle();
+    }
+
+    // The status bar identifies the stable local endpoint applications should use.
+    private void UpdateProxyInfo()
+    {
+        if (IsDisposed || Disposing) return;
+        lblProxyInfo.Text = $"Local proxy: 127.0.0.1:{Aether.ProxyPort} (HTTP + SOCKS5)";
+        lblProxyInfo.ToolTipText = "HTTP and SOCKS5 are multiplexed on this local port. The proxy is available while connected.";
     }
 
     // The log fills the empty space under the controls; showing it does not resize the window.
@@ -231,8 +243,9 @@ public partial class Form1 : Form
             KillProcess();
             SetStatus("Disconnected", Palette.Disconnected);
             statCards.Visible = false;
-            lblDelay.Text = "Delay: -";
-            lblDelay.ForeColor = SystemColors.ControlText;
+            exitPanel.Visible = false;
+            _exitInfo = null;
+            UpdateProxyInfo();
         }
     }
 
@@ -242,6 +255,8 @@ public partial class Form1 : Form
         ct.ThrowIfCancellationRequested();
         Log($"Trying {p.Name}...");
         SetStatus($"Connecting: {p.Name}", Palette.Connecting);
+        exitPanel.Visible = false;
+        _exitInfo = null;
         var proc = _process = Aether.Start(p, Log, _coreOptions, scan);
         if (proc is null) return;
 
@@ -269,7 +284,8 @@ public partial class Form1 : Form
         }
 
         if (chkSysProxy.Checked) SystemProxy.Enable();
-        if (chkTun.Checked) TunMode.Enable(Aether.ProxyPort, Log);
+        if (chkTun.Checked) await StartTunAsync(ct);
+        ct.ThrowIfCancellationRequested();
         SetStatus($"Connected: {p.Name}", Palette.Connected);
         var (verdict, verdictColor) = CoreSettingsForm.Verdict(_stats[index]);
         var st = _stats[index];
@@ -287,18 +303,16 @@ public partial class Form1 : Form
         if (chkPsiphon.Checked && !p.Args.Contains("psiphon")) _ = StartPsiphonAsync(ct); // a download must not hold up the connection monitor below
         if (!realDelayTest)
         {
-            lblDelay.Text = "Delay: not tested";
+            UpdateProxyInfo();
             SetStat(statPing, "not tested", Palette.MutedText);
-            lblDelay.ForeColor = SystemColors.ControlText;
             while (!proc.HasExited) await Task.Delay(1000, ct);
         }
         else
         {
             for (int fails = 0; fails < 2;)
             {
-                lblDelay.Text = ms is null ? "Delay: timeout" : $"Delay: {ms} ms";
+                UpdateProxyInfo();
                 SetStat(statPing, ms is null ? "timeout" : $"{ms} ms", PingColor(ms));
-                lblDelay.ForeColor = PingColor(ms);
                 await Task.Delay(5000, ct);
                 if (proc.HasExited) break;
                 ms = await Aether.PingAsync(ct);
@@ -322,6 +336,7 @@ public partial class Form1 : Form
         }
         catch (OperationCanceledException) { return; }
         finally { _psiphonStarting = false; }
+        Log(Psiphon.ExternalCountryNotice);
         var exe = Psiphon.Exe;
         // Psiphon reads its Upstream Proxy setting from here at startup: point it at our HTTP port.
         using (var key = Registry.CurrentUser.CreateSubKey(@"Software\Psiphon3"))
@@ -343,6 +358,14 @@ public partial class Form1 : Form
         _watchdogStarted = true;
         Process.Start(new ProcessStartInfo(Environment.ProcessPath!, $"--watchdog {Environment.ProcessId}") { CreateNoWindow = true, UseShellExecute = false });
         SystemProxy.StartIndependentGuard(Environment.ProcessId);
+    }
+
+    private async Task StartTunAsync(CancellationToken ct)
+    {
+        chkTun.Enabled = false;
+        Log("Configuring TUN adapter and routes...");
+        try { await TunMode.EnableAsync(Aether.ProxyPort, Log, ct); }
+        finally { if (!IsDisposed && !Disposing) chkTun.Enabled = TunMode.Available; }
     }
 
     private void KillProcess()
@@ -477,7 +500,7 @@ public partial class Form1 : Form
         Log($"System proxy: {SystemProxy.Status()}", info);
         Log($"TUN mode: {(chkTun.Checked ? "on" : "off")}{(TunMode.Available ? "" : " (tun2socks missing)")}{(TunMode.IsAdmin ? "" : " (not admin)")}", info);
         Log($"Proxy {Aether.ProxyPort} (HTTP + SOCKS5, system proxy) | core: SOCKS5 {Aether.SocksPort}, HTTP {Aether.CoreHttpPort}", info);
-        Log($"aether.exe: {(_process is { HasExited: false } ? "running" : "stopped")} | {lblStatus.Text.TrimStart('●', ' ')} | {lblDelay.Text}", info);
+        Log($"aether.exe: {(_process is { HasExited: false } ? "running" : "stopped")} | {lblStatus.Text.TrimStart('●', ' ')} | Local proxy: 127.0.0.1:{Aether.ProxyPort} (HTTP + SOCKS5)", info);
         Log("Presets: " + string.Join(", ", Aether.Presets.Select(p => p.Name)), info);
         Log("Cleanup: form close, --watchdog copy, hidden PowerShell guard, reset on startup.", info);
         Log("=== Recommendations ===", head);
@@ -537,6 +560,7 @@ public partial class Form1 : Form
             try { BeginInvoke(() => Log(msg, color)); } catch (InvalidOperationException) { }
             return;
         }
+        if (Aether.ParseExit(msg) is { } exit) ShowExit(exit);
         color ??= LogColor(msg);
         txtMiniLog.SelectionStart = txtMiniLog.TextLength;
         txtMiniLog.SelectionColor = color.Value;
@@ -552,6 +576,22 @@ public partial class Form1 : Form
             txtMiniLog.SelectionStart = txtMiniLog.TextLength;
             txtMiniLog.ScrollToCaret();
         }
+    }
+
+    private ExitInfo? _exitInfo;
+
+    // Shows the tunnel's exit hop: flag, country name, IP, latency and WARP marker.
+    private void ShowExit(ExitInfo exit)
+    {
+        _exitInfo = exit;
+        var flag = Aether.CountryFlag(exit.CountryCode);
+        exitFlag.Image = flag;
+        exitFlag.Visible = flag is not null;
+        var text = $"{Aether.CountryName(exit.CountryCode)} · {exit.Ip}";
+        if (exit.LatencyMs is int ms) text += $" · {ms} ms";
+        if (exit.Warp) text += " · WARP";
+        exitText.Text = text;
+        exitPanel.Visible = true;
     }
 
     // Green when fast, amber when slow, red when very slow or timed out.

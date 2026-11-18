@@ -21,5 +21,6 @@
     <None Include="aether.exe;aether.toml;aether-masque.toml" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <None Include="pt\**;LICENSES\**;tun2socks\**" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <EmbeddedResource Include="flutter/assets/psiphon.png" LogicalName="psiphon.png" />
+    <EmbeddedResource Include="flags\*.png" />
   </ItemGroup>
 </Project>

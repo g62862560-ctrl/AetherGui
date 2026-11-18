@@ -3,6 +3,7 @@ namespace AetherGui;
 sealed class CoreSettingsForm : Form
 {
     public CoreOptions Options { get; private set; }
+    private readonly ComboBox _psiphonRegion = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 290, AccessibleName = "Psiphon server country", DisplayMember = nameof(Psiphon.Country.Label) };
     private readonly TextBox _arguments = Editor();
     private readonly TextBox _environment = Editor();
     private readonly NumericUpDown _timeout = new() { Minimum = 30, Maximum = 3600, Width = 120 };
@@ -35,6 +36,39 @@ sealed class CoreSettingsForm : Form
         Multiline = true, AcceptsReturn = true, ScrollBars = ScrollBars.Both,
         WordWrap = false, Dock = DockStyle.Fill, Font = new Font("Courier New", 9F)
     };
+
+    // Windows does not draw Unicode flag emoji, so the selector paints real embedded flag images.
+    private static void DrawCountry(object? sender, DrawItemEventArgs e)
+    {
+        if (sender is not ComboBox box || e.Index < 0 || e.Index >= box.Items.Count) return;
+        if (box.Items[e.Index] is not Psiphon.Country country) return;
+        bool selected = (e.State & DrawItemState.Selected) != 0;
+        using var bg = new SolidBrush(selected ? SystemColors.Highlight : e.BackColor);
+        e.Graphics.FillRectangle(bg, e.Bounds);
+        var fg = selected ? SystemColors.HighlightText : e.ForeColor;
+
+        const int FlagW = 26, FlagH = 16, Gap = 4;
+        var area = new Rectangle(e.Bounds.X + Gap, e.Bounds.Y + (e.Bounds.Height - FlagH) / 2, FlagW, FlagH);
+        if (country.Flag is Image flag)
+        {
+            var scale = Math.Min((float)FlagW / flag.Width, (float)FlagH / flag.Height);
+            var w = (int)Math.Round(flag.Width * scale);
+            var h = (int)Math.Round(flag.Height * scale);
+            e.Graphics.DrawImage(flag, new Rectangle(area.X + (FlagW - w) / 2, area.Y + (FlagH - h) / 2, w, h));
+        }
+        else
+        {
+            using var pen = new Pen(fg);
+            var r = FlagH / 2f;
+            var c = new PointF(area.X + FlagW / 2f, area.Y + FlagH / 2f);
+            e.Graphics.DrawEllipse(pen, c.X - r, c.Y - r, r * 2, r * 2);
+            e.Graphics.DrawEllipse(pen, c.X - r, c.Y - r / 2, r * 2, r);
+            e.Graphics.DrawLine(pen, c.X - r, c.Y, c.X + r, c.Y);
+        }
+        var size = TextRenderer.MeasureText(country.Label, box.Font);
+        var text = new Point(area.Right + Gap, e.Bounds.Y + (e.Bounds.Height - size.Height) / 2);
+        TextRenderer.DrawText(e.Graphics, country.Label, box.Font, text, fg);
+    }
 
     public CoreSettingsForm(CoreOptions options, IReadOnlyDictionary<int, int>? connectMs = null, int[]? menuOrder = null, IReadOnlyDictionary<int, ProtocolStat>? stats = null)
     {
@@ -99,6 +133,22 @@ sealed class CoreSettingsForm : Form
         var urlRow = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
         urlRow.Controls.AddRange([new Label { Text = "Delay test URL", AutoSize = true }, _testUrl]);
         Add(urlRow);
+        var psiphonTab = new TabPage("Psiphon") { Padding = new Padding(12), BackColor = Palette.Background };
+        var countryLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, AutoScroll = true };
+        countryLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        _psiphonRegion.Items.AddRange(Psiphon.Countries.Cast<object>().ToArray());
+        _psiphonRegion.SelectedItem = Psiphon.Countries.First(c => c.Code == CoreOptions.NormalizePsiphonRegion(options.PsiphonRegion));
+        _psiphonRegion.DrawMode = DrawMode.OwnerDrawFixed;
+        _psiphonRegion.ItemHeight = 22;
+        _psiphonRegion.DrawItem += DrawCountry;
+        countryLayout.Controls.Add(new Label { Text = "Psiphon server country", AutoSize = true });
+        countryLayout.Controls.Add(_psiphonRegion);
+        countryLayout.Controls.Add(new Label { AutoSize = true, Dock = DockStyle.Top, Text =
+            "Applies on the next connection to core Psiphon-only, forward and reverse modes. In reverse mode this selects the Psiphon carrier, not the final WARP exit.\n\n" +
+            "Common country requests, not guaranteed servers. Availability changes: check AvailableEgressRegions in the activity log. An unavailable country may prevent connection; try Automatic. Netify IP inventory is not a selectable-server list.\n\n" +
+            "Automatic adds no region override. Advanced --psiphon-region / AETHER_PSIPHON_REGION settings take precedence and are preserved. Custom configs may also specify a region.\n\n" +
+            Psiphon.ExternalCountryNotice + "\n\nFlags are drawn from embedded images; Automatic is shown as a globe." });
+        psiphonTab.Controls.Add(countryLayout);
         // Under the tabs, so the one Save also saves the Auto order tab.
         var buttons = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Bottom, Padding = new Padding(6) };
         var save = new Button { Text = "Save", AutoSize = true, MinimumSize = new Size(75, 23), Font = new Font("Segoe UI", 9F, FontStyle.Bold) }; // bold like the main window's primary button
@@ -107,11 +157,11 @@ sealed class CoreSettingsForm : Form
         save.Click += (_, _) => SaveOptions();
         reset.Click += (_, _) =>
         {
-            _arguments.Text = "[]"; _environment.Text = "{}"; _timeout.Value = 300;
+            _psiphonRegion.SelectedIndex = 0; _arguments.Text = "[]"; _environment.Text = "{}"; _timeout.Value = 300;
             _port.Value = Aether.DefaultProxyPort; _realDelayTest.Checked = true; _testUrl.Text = Aether.DefaultTestUrl; ResetOrder();
         };
         buttons.Controls.AddRange([save, reset, cancel]);
-        settings.Controls.Add(layout); tabs.TabPages.AddRange([settings, orderTab, helpTab]); Controls.AddRange([tabs, buttons]);
+        settings.Controls.Add(layout); tabs.TabPages.AddRange([settings, orderTab, helpTab, psiphonTab]); Controls.AddRange([tabs, buttons]);
         CancelButton = cancel;
         Shown += async (_, _) =>
         {
@@ -281,7 +331,7 @@ sealed class CoreSettingsForm : Form
         _checkedOrder = order;
         try
         {
-            var options = CoreOptions.Parse(_arguments.Text, _environment.Text, (int)_timeout.Value);
+            var options = CoreOptions.Parse(_arguments.Text, _environment.Text, (int)_timeout.Value, (_psiphonRegion.SelectedItem as Psiphon.Country)?.Code);
             options.Save(); Aether.ProxyPort = port; Aether.RealDelayTest = _realDelayTest.Checked; Aether.TestUrl = _testUrl.Text.Trim(); Aether.SavedOrder = order; Options = options; DialogResult = DialogResult.OK; Close();
         }
         catch (Exception ex) when (ex is System.Text.Json.JsonException or FormatException)

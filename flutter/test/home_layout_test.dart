@@ -137,6 +137,12 @@ void main() {
       await tester.tap(find.byTooltip('Settings'));
       await tester.pumpAndSettle();
       expect(find.byType(DropdownMenu<int>), findsNothing);
+      expect(find.text('Psiphon server country'), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('Auto order'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
       expect(find.text('Auto order'), findsOneWidget);
       await tester.scrollUntilVisible(
         find.text('Waiting for logs...'),

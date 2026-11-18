@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
@@ -26,6 +27,10 @@ record Preset(string Name, string Args, int StartupSecs = Aether.FastSecs, strin
     public bool ManualOnly => StartupSecs > Aether.FastSecs && !AutoByDefault;
     public string Label => ManualOnly ? Name + " (manual)" : Name;
 }
+
+// One core "exit:" line, parsed so the GUI can show where the tunnel exits.
+// Example: "[+] masque-in-masque exit: 104.28.214.161, IR via FRA, 448ms to cloudflare, warp on"
+record ExitInfo(string Ip, string CountryCode, string? Colo, int? LatencyMs, bool Warp);
 
 // Everything about aether.exe itself: where it lives, downloading it, starting it, and testing its tunnel.
 static class Aether
@@ -347,6 +352,11 @@ static class Aether
         var args = p.Args.Split(' ', StringSplitOptions.RemoveEmptyEntries)
             .Where(a => a is not ("--turbo" or "-4" or "--quick-reconnect")).ToList();
         bool tor = args.Contains("--tor"), psiphon = args.Contains("--psiphon");
+        bool usesPsiphon = args.Any(a => a is "--psiphon" or "--psiphon-only" or "--psiphon-reverse");
+        var region = CoreOptions.NormalizePsiphonRegion(options.PsiphonRegion);
+        // Explicit expert arguments/environment retain precedence; never add a competing flag.
+        if (usesPsiphon && region.Length != 0 && !options.HasPsiphonRegionOverride)
+            args.AddRange(["--psiphon-region", region]);
         args.AddRange(options.Arguments);
         args.AddRange(["--bind", $"127.0.0.1:{(tor || psiphon ? InnerPort : SocksPort)}"]);
         if (tor) args.AddRange(["--tor-bind", $"127.0.0.1:{SocksPort}"]);
@@ -442,6 +452,41 @@ static class Aether
         try { using var c = new TcpClient(); await c.ConnectAsync("127.0.0.1", SocksPort, ct); return true; }
         catch (Exception) when (!ct.IsCancellationRequested) { return false; }
     }
+
+    // "[+] masque-in-masque exit: 104.28.214.161, IR via FRA, 448ms to cloudflare, warp on"
+    // Null when the line is not an exit line (or the IP part is not a dotted IPv4).
+    public static ExitInfo? ParseExit(string line)
+    {
+        var marker = line.IndexOf(" exit: ", StringComparison.Ordinal);
+        if (marker < 0) return null;
+        var parts = line[(marker + 7)..].Split(", ");
+        if (parts.Length < 2) return null;
+        var ip = parts[0].Trim();
+        if (ip.Length == 0 || ip.Count(c => c == '.') != 3) return null;
+        var seg = parts[1].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var code = seg.Length > 0 ? seg[0].ToUpperInvariant() : "";
+        if (code.Length != 2 || !code.All(char.IsAsciiLetter)) return null;
+        string? colo = seg.Length > 2 && seg[1].Equals("via", StringComparison.OrdinalIgnoreCase) ? seg[2] : null;
+        int? latency = null;
+        if (parts.Length > 2)
+        {
+            var t = parts[2];
+            var m = t.IndexOf("ms", StringComparison.Ordinal);
+            if (m > 0 && int.TryParse(t.AsSpan(0, m), out var ms)) latency = ms;
+        }
+        bool warp = parts.Length > 3 && parts[3].Contains("warp on", StringComparison.OrdinalIgnoreCase);
+        return new ExitInfo(ip, code, colo, latency, warp);
+    }
+
+    // Two-letter ISO code -> English name; falls back to the code when unknown.
+    public static string CountryName(string code)
+    {
+        try { return new RegionInfo(code).EnglishName; }
+        catch (ArgumentException) { return code; }
+    }
+
+    // Embedded flag image for a country the selector ships; null for others (the display falls back to text).
+    public static Image? CountryFlag(string code) => Psiphon.Countries.FirstOrDefault(c => c.Code == code)?.Flag;
 
     public static async Task<int?> PingAsync(CancellationToken ct)
     {

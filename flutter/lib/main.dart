@@ -9,6 +9,8 @@ import 'auto_order_page.dart';
 import 'protocol_order_sheet.dart';
 import 'core_options.dart';
 import 'core_settings_page.dart';
+import 'exit_info.dart';
+import 'psiphon_countries.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -104,6 +106,7 @@ class _HomePageState extends State<HomePage> {
   String _delay = ''; // e.g. '24 ms', shown beside the route while connected
   String? _appVersion;
   String? _route; // preset being tried or used right now
+  ExitInfo? _exitInfo; // latest tunnel exit hop, shown while connected
   String? _error; // latest failure, shown on Home until connected or dismissed
   int? _busyPort,
       _freePort; // occupied port behind _error, and a free one to offer
@@ -251,6 +254,7 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       _clearError();
       _steps.clear();
+      _exitInfo = null;
     });
     await _run(ct);
     _ct = null;
@@ -347,6 +351,7 @@ class _HomePageState extends State<HomePage> {
       _setStatus('Disconnected', red);
       _setDelay('');
       _route = null;
+      _exitInfo = null;
     }
   }
 
@@ -357,6 +362,7 @@ class _HomePageState extends State<HomePage> {
     Cancel ct,
   ) async {
     ct.check();
+    _exitInfo = null;
     _step('Trying ${p.name}...');
     _route = p.name;
     _setStatus('Connecting: ${p.name}', orange);
@@ -388,7 +394,13 @@ class _HomePageState extends State<HomePage> {
       await Future.delayed(const Duration(milliseconds: 200));
     }
 
-    final proc = _process = await Aether.start(p, coreLog, _coreOptions, _scan);
+    final proc = _process = await Aether.start(
+      p,
+      coreLog,
+      _coreOptions,
+      _scan,
+      _onExit,
+    );
     ct.check();
     if (proc == null) {
       if (mounted) {
@@ -498,6 +510,7 @@ class _HomePageState extends State<HomePage> {
       }
     }
     _logError('${p.name}: connection lost, switching.');
+    _exitInfo = null;
     _addStep('${p.name}: connection lost, switching.', red);
     await _killProcessAndWait();
   }
@@ -803,6 +816,10 @@ class _HomePageState extends State<HomePage> {
     if (mounted) setState(() => _delay = text);
   }
 
+  void _onExit(ExitInfo exit) {
+    if (mounted) setState(() => _exitInfo = exit);
+  }
+
   @override
   void setState(VoidCallback fn) {
     super.setState(fn);
@@ -895,9 +912,13 @@ class _HomePageState extends State<HomePage> {
                   ),
                   const SizedBox(height: 16),
                   _routeLine(),
-                  // Once connected, the numbers sit in small cards instead of one crowded line.
+                  // Once connected, the exit hop and numbers sit in small cards instead of one crowded line.
                   if (_statusColor == seaGreen) ...[
                     const SizedBox(height: 12),
+                    if (_exitInfo != null) ...[
+                      _exitCard(),
+                      const SizedBox(height: 8),
+                    ],
                     _statCards(),
                   ],
                   const SizedBox(height: 12),
@@ -1104,6 +1125,19 @@ class _HomePageState extends State<HomePage> {
       ],
     );
   }
+
+  // The tunnel's exit hop, parsed from the core's per-tunnel "exit:" line.
+  Widget _exitCard() => Card(
+    key: const Key('exitInfo'),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+      child: Text(
+        formatExit(_exitInfo!),
+        textAlign: TextAlign.center,
+        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+      ),
+    ),
+  );
 
   // Round button: forget learned speeds and the saved order, go back to Auto, then connect.
   Widget _resetConnectButton(bool busy) => _tonalAction(
@@ -1551,6 +1585,53 @@ class _HomePageState extends State<HomePage> {
         padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
         children: [
           section('Connection'),
+          DropdownButtonFormField<String>(
+            key: ValueKey('psiphon-country-${_coreOptions.psiphonRegion}'),
+            initialValue: _coreOptions.psiphonRegion,
+            isExpanded: true,
+            decoration: const InputDecoration(
+              labelText: 'Psiphon server country',
+              border: OutlineInputBorder(),
+            ),
+            items: [
+              for (final country in psiphonCountries)
+                DropdownMenuItem(
+                  value: country.code,
+                  child: Text(country.label),
+                ),
+            ],
+            onChanged: (value) {
+              if (value == null) return;
+              try {
+                final saved = CoreOptions.savePsiphonRegion(Aether.dir, value);
+                setState(() => _coreOptions = saved);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Country saved. Reconnect to apply changes.'),
+                  ),
+                );
+              } catch (_) {
+                setState(() {});
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Could not save country. Please try again.'),
+                  ),
+                );
+              }
+            },
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Saved automatically. Reconnect to apply changes. Applies only to Psiphon protocols. '
+            'Automatic lets Psiphon choose. In reverse modes (Psiphon + WARP), '
+            'this selects the Psiphon carrier country, not the final WARP exit. '
+            'This list is not a live server inventory; country availability is not guaranteed. '
+            'Explicit --psiphon-region arguments or AETHER_PSIPHON_REGION environment settings '
+            'in Core settings override this selector, including empty values.',
+          ),
+          if (_coreOptions.hasPsiphonRegionOverride)
+            const Text('An advanced Psiphon region override is active.'),
+          const SizedBox(height: 16),
           ListTile(
             leading: const Icon(Icons.low_priority_rounded),
             title: const Text('Auto order'),

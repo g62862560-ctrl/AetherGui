@@ -1,17 +1,37 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'psiphon_countries.dart';
+
 /// Expert settings use JSON arrays, not shell splitting: spaces in bridge lines,
 /// routing expressions, tokens and paths must reach the core unchanged.
 class CoreOptions {
   final List<String> arguments;
   final Map<String, String> environment;
   final int startupSeconds;
+  final String psiphonRegion;
+
+  static String normalizePsiphonRegion(String? region) {
+    final code = (region ?? '').trim().toUpperCase();
+    if (!psiphonCountries.any((c) => c.code == code)) {
+      throw const FormatException(
+        'Unknown Psiphon country. Choose Automatic or a listed country.',
+      );
+    }
+    return code;
+  }
+
+  bool get hasPsiphonRegionOverride =>
+      arguments.any(
+        (a) => a == '--psiphon-region' || a.startsWith('--psiphon-region='),
+      ) ||
+      environment.keys.any((k) => k.toUpperCase() == 'AETHER_PSIPHON_REGION');
 
   const CoreOptions({
     this.arguments = const [],
     this.environment = const {},
     this.startupSeconds = 300,
+    this.psiphonRegion = '',
   });
 
   static const managedFlags = {
@@ -63,8 +83,9 @@ class CoreOptions {
   factory CoreOptions.parse(
     String arguments,
     String environment,
-    String timeout,
-  ) {
+    String timeout, {
+    String? psiphonRegion,
+  }) {
     final args = jsonDecode(arguments);
     final env = jsonDecode(environment);
     final seconds = int.tryParse(timeout);
@@ -102,10 +123,14 @@ class CoreOptions {
       arguments: args.cast<String>(),
       environment: env.cast<String, String>(),
       startupSeconds: seconds,
+      psiphonRegion: normalizePsiphonRegion(psiphonRegion),
     );
   }
 
-  bool get isConfigured => arguments.isNotEmpty || environment.isNotEmpty;
+  bool get isConfigured =>
+      arguments.isNotEmpty ||
+      environment.isNotEmpty ||
+      psiphonRegion.isNotEmpty;
   String get argumentsJson =>
       const JsonEncoder.withIndent('  ').convert(arguments);
   String get environmentJson =>
@@ -119,8 +144,41 @@ class CoreOptions {
       jsonEncode(data['arguments']),
       jsonEncode(data['environment']),
       '${data['startupSeconds']}',
+      psiphonRegion: data['psiphonRegion'] as String?,
     );
   }
+
+  CoreOptions withPsiphonRegion(String region) => CoreOptions(
+    arguments: arguments,
+    environment: environment,
+    startupSeconds: startupSeconds,
+    psiphonRegion: normalizePsiphonRegion(region),
+  );
+
+  // Merge and write without yielding: independent settings owners cannot write
+  // stale snapshots over each other's fields.
+  static CoreOptions savePsiphonRegion(String directory, String region) {
+    final options = load(directory).withPsiphonRegion(region);
+    options._writeSync(directory);
+    return options;
+  }
+
+  CoreOptions saveAdvanced(String directory) {
+    final options = withPsiphonRegion(load(directory).psiphonRegion);
+    options._writeSync(directory);
+    return options;
+  }
+
+  void _writeSync(String directory) =>
+      File('$directory/core-options.json').writeAsStringSync(
+        jsonEncode({
+          'arguments': arguments,
+          'environment': environment,
+          'startupSeconds': startupSeconds,
+          'psiphonRegion': psiphonRegion,
+        }),
+        flush: true,
+      );
 
   Future<void> save(String directory) => File('$directory/core-options.json')
       .writeAsString(
@@ -128,6 +186,7 @@ class CoreOptions {
           'arguments': arguments,
           'environment': environment,
           'startupSeconds': startupSeconds,
+          'psiphonRegion': normalizePsiphonRegion(psiphonRegion),
         }),
       )
       .then((_) {});

@@ -65,8 +65,8 @@ class _CoreSettingsPageState extends State<CoreSettingsPage> {
         _environment.text,
         _timeout.text,
       );
-      await options.save(Aether.dir);
-      if (mounted) Navigator.pop(context, options);
+      final saved = options.saveAdvanced(Aether.dir);
+      if (mounted) Navigator.pop(context, saved);
     } catch (e) {
       if (mounted)
         setState(
@@ -153,7 +153,7 @@ class _CoreSettingsPageState extends State<CoreSettingsPage> {
                   border: OutlineInputBorder(),
                   labelText: 'Advanced startup timeout (seconds)',
                   helperText:
-                      '30–3600; used when extra arguments/environment are configured.',
+                      '30–3600; used when a country or extra arguments/environment are configured.',
                   helperMaxLines: 3,
                 ),
               ),

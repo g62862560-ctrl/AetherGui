@@ -7,7 +7,17 @@ sealed class CoreOptions
     public string[] Arguments { get; set; } = [];
     public Dictionary<string, string> EnvironmentVariables { get; set; } = new();
     public int StartupSeconds { get; set; } = 300;
-    public bool IsConfigured => Arguments.Length != 0 || EnvironmentVariables.Count != 0;
+    public string PsiphonRegion { get; set; } = "";
+    public bool IsConfigured => Arguments.Length != 0 || EnvironmentVariables.Count != 0 || PsiphonRegion.Length != 0;
+    public bool HasPsiphonRegionOverride => Arguments.Any(a => a == "--psiphon-region" || a.StartsWith("--psiphon-region=", StringComparison.Ordinal))
+        || EnvironmentVariables.Keys.Any(k => k.Equals("AETHER_PSIPHON_REGION", StringComparison.OrdinalIgnoreCase));
+
+    public static string NormalizePsiphonRegion(string? region)
+    {
+        var code = (region ?? "").Trim().ToUpperInvariant();
+        if (!Psiphon.Countries.Any(c => c.Code == code)) throw new FormatException("Unknown Psiphon country. Choose Automatic or a listed country.");
+        return code;
+    }
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
     private static readonly string FilePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AetherGui", "core-options.json");
@@ -27,7 +37,7 @@ sealed class CoreOptions
     public string ArgumentsJson => JsonSerializer.Serialize(Arguments, Json);
     public string EnvironmentJson => JsonSerializer.Serialize(EnvironmentVariables, Json);
 
-    public static CoreOptions Parse(string arguments, string environment, int seconds)
+    public static CoreOptions Parse(string arguments, string environment, int seconds, string? psiphonRegion = null)
     {
         var args = JsonSerializer.Deserialize<string[]>(arguments) ?? throw new FormatException("Arguments must be a JSON array of strings.");
         var env = JsonSerializer.Deserialize<Dictionary<string, string>>(environment) ?? throw new FormatException("Environment must be a JSON object of strings.");
@@ -43,21 +53,26 @@ sealed class CoreOptions
                 !normalized.TryAdd(key, value))
                 throw new FormatException("Environment contains an app-managed key or invalid value.");
         }
-        return new CoreOptions { Arguments = args, EnvironmentVariables = normalized, StartupSeconds = seconds };
+        return new CoreOptions { Arguments = args, EnvironmentVariables = normalized, StartupSeconds = seconds, PsiphonRegion = NormalizePsiphonRegion(psiphonRegion) };
     }
 
-    public static CoreOptions Load()
+    public static CoreOptions Load() => Load(FilePath);
+
+    internal static CoreOptions Load(string path)
     {
-        if (!File.Exists(FilePath)) return new();
-        var data = JsonSerializer.Deserialize<CoreOptions>(File.ReadAllText(FilePath)) ?? throw new FormatException("Invalid settings.");
-        return Parse(data.ArgumentsJson, data.EnvironmentJson, data.StartupSeconds);
+        if (!File.Exists(path)) return new();
+        var data = JsonSerializer.Deserialize<CoreOptions>(File.ReadAllText(path)) ?? throw new FormatException("Invalid settings.");
+        return Parse(data.ArgumentsJson, data.EnvironmentJson, data.StartupSeconds, data.PsiphonRegion);
     }
 
-    public void Save()
+    public void Save() => Save(FilePath);
+
+    internal void Save(string path)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-        var temp = FilePath + ".tmp";
-        File.WriteAllText(temp, JsonSerializer.Serialize(new { Arguments, EnvironmentVariables, StartupSeconds }, Json));
-        File.Move(temp, FilePath, true);
+        var validated = Parse(ArgumentsJson, EnvironmentJson, StartupSeconds, PsiphonRegion);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temp = path + ".tmp";
+        File.WriteAllText(temp, JsonSerializer.Serialize(new { Arguments, EnvironmentVariables, StartupSeconds, validated.PsiphonRegion }, Json));
+        File.Move(temp, path, true);
     }
 }

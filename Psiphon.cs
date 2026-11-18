@@ -9,6 +9,50 @@ namespace AetherGui;
 // psiphon3.exe beside this exe: downloaded through the tunnel when missing, run only if Psiphon Inc. signed it.
 static class Psiphon
 {
+    public sealed record Country(string Code, string Name)
+    {
+        public string Label => Code.Length == 0 ? "Automatic" : $"{Name} ({Code})";
+        public override string ToString() => Label;
+
+        // Real flag image (flags/<code>.png embedded in the assembly). Windows does not render
+        // Unicode flag emoji (regional indicators), so the selector draws these images instead.
+        public Image? Flag
+        {
+            get
+            {
+                if (Code.Length == 0) return null;
+                if (_flags.TryGetValue(Code, out var cached)) return cached;
+                Image? image = null;
+                using var stream = typeof(Psiphon).Assembly.GetManifestResourceStream($"AetherGui.flags.{Code.ToLowerInvariant()}.png");
+                if (stream is not null)
+                {
+                    using var ms = new MemoryStream();
+                    stream.CopyTo(ms);
+                    using var loaded = Image.FromStream(ms);
+                    image = new Bitmap(loaded); // independent copy so the streams may be closed
+                }
+                _flags[Code] = image;
+                return image;
+            }
+        }
+        private static readonly Dictionary<string, Image?> _flags = new(StringComparer.Ordinal);
+    }
+
+    // Common requests, not a live server inventory. AvailableEgressRegions is authoritative at runtime.
+    public static readonly Country[] Countries =
+    [
+        new("", "Automatic"), new("AT", "Austria"), new("BE", "Belgium"),
+        new("CA", "Canada"), new("CH", "Switzerland"), new("CZ", "Czechia"),
+        new("DE", "Germany"), new("DK", "Denmark"), new("ES", "Spain"),
+        new("FI", "Finland"), new("FR", "France"), new("GB", "United Kingdom"),
+        new("HU", "Hungary"), new("IE", "Ireland"), new("IN", "India"),
+        new("IT", "Italy"), new("JP", "Japan"), new("NL", "Netherlands"),
+        new("NO", "Norway"), new("PL", "Poland"), new("RO", "Romania"),
+        new("RS", "Serbia"), new("SE", "Sweden"), new("SG", "Singapore"),
+        new("SK", "Slovakia"), new("US", "United States")
+    ];
+    public const string ExternalCountryNotice = "Separate psiphon3.exe uses its own server-region setting; choose its country in the Psiphon window. The core country selector does not control it.";
+
     public static readonly string Exe = Path.Combine(AppContext.BaseDirectory, "psiphon3.exe");
     private static readonly string[] Urls = ["https://psiphon.ca/psiphon3.exe", "https://s3.amazonaws.com/psiphon/web/mjr4-p23r-puwl/psiphon3.exe"];
 

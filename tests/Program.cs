@@ -11,10 +11,72 @@ static class Checks
     [STAThread]
     static void Main()
     {
+        Check(TunMode.PowerShell("Write-Output \"Ethernet adapter\"").Trim() == "Ethernet adapter",
+            "TUN PowerShell preserves embedded double quotes");
+        var alias = "Ethernet O'Brien $adapter";
+        Check(TunMode.PowerShell("Write-Output " + TunMode.PsLiteral(alias)).Trim() == alias,
+            "TUN interface names remain literal");
+        bool queryFailed = false;
+        try { TunMode.PowerShell("throw 'test failure'"); }
+        catch (InvalidOperationException) { queryFailed = true; }
+        Check(queryFailed, "TUN PowerShell failures are not treated as empty route lists");
+        Check(!string.IsNullOrWhiteSpace(TunMode.PowerShell(
+            "Get-NetRoute -AddressFamily IPv4 -PolicyStore ActiveStore -ErrorAction Stop | Select-Object -ExpandProperty DestinationPrefix")),
+            "TUN route query reads the live Windows route table");
+
         var options = CoreOptions.Parse("[\"--tor-bridge\",\"obfs4 1.2.3.4:443 cert=abc iat-mode=0\"]",
             "{\"AETHER_SCAN\":\"balanced\"}", 600);
         Check(options.Arguments.Length == 2 && options.Arguments[1].Contains(" iat-mode=0"), "Arguments preserve spaces");
         Check(options.StartupSeconds == 600, "Advanced timeout");
+        var countryOptions = CoreOptions.Parse(options.ArgumentsJson, options.EnvironmentJson, 600, " de ");
+        Check(countryOptions.PsiphonRegion == "DE" && countryOptions.IsConfigured, "Country normalized and configured");
+        Check(Psiphon.Countries.Select(c => c.Code).Distinct().Count() == Psiphon.Countries.Length
+            && Psiphon.Countries.Single(c => c.Code == "DE").Label == "Germany (DE)", "Unique country codes and clean labels");
+        foreach (var invalid in new[] { "ZZ", "DE,US", "--help", "D", "🇩🇪" })
+        {
+            bool rejected = false;
+            try { CoreOptions.Parse("[]", "{}", 300, invalid); } catch (FormatException) { rejected = true; }
+            Check(rejected, "Reject invalid country " + invalid);
+        }
+        var countryPath = Path.Combine(Path.GetTempPath(), "aether-country-" + Guid.NewGuid() + ".json");
+        try
+        {
+            countryOptions.Save(countryPath);
+            var loaded = CoreOptions.Load(countryPath);
+            Check(loaded.PsiphonRegion == "DE" && loaded.Arguments.SequenceEqual(options.Arguments)
+                && loaded.EnvironmentVariables["AETHER_SCAN"] == "balanced" && loaded.StartupSeconds == 600, "Country persistence preserves expert settings");
+            File.WriteAllText(countryPath, "{\"Arguments\":[],\"EnvironmentVariables\":{},\"StartupSeconds\":300}");
+            Check(CoreOptions.Load(countryPath).PsiphonRegion == "", "Legacy settings default to Automatic");
+            new CoreOptions().Save(countryPath);
+            Check(CoreOptions.Load(countryPath).PsiphonRegion == "", "Automatic persistence");
+        }
+        finally { File.Delete(countryPath); File.Delete(countryPath + ".tmp"); }
+        Check(Aether.ParseExit("[+] masque-in-masque exit: 104.28.214.161, IR via FRA, 448ms to cloudflare, warp on")
+            is { Ip: "104.28.214.161", CountryCode: "IR", Colo: "FRA", LatencyMs: 448, Warp: true }, "Exit line parsed with colo and warp");
+        Check(Aether.ParseExit("[+] psiphon exit: 1.2.3.4, US, 250ms to cloudflare, warp off")
+            is { CountryCode: "US", Colo: null, LatencyMs: 250, Warp: false }, "Psiphon exit parsed without colo or warp");
+        Check(Aether.ParseExit("Listening on 127.0.0.1:1818") is null, "Non-exit lines are ignored");
+        Check(Aether.CountryName("US") == "United States" && Aether.CountryName("DE") == "Germany"
+            && Aether.CountryName("ZZ") == "ZZ", "Exit country names resolve, unknown codes pass through");
+        Check(Aether.CountryFlag("ZZ") is null, "Unknown exit country has no flag image");
+        _ = Aether.CountryFlag("DE"); // must not throw; the image is embedded in the app, not the test host
+        foreach (var preset in Aether.Presets)
+        {
+            var args = Aether.CreateStartInfo(preset, countryOptions).ArgumentList.ToList();
+            bool usesPsiphon = preset.Args.Split(' ').Any(a => a is "--psiphon" or "--psiphon-only" or "--psiphon-reverse");
+            Check(args.Contains("--psiphon-region") == usesPsiphon, preset.Name + " country scope");
+            if (usesPsiphon) Check(args[args.IndexOf("--psiphon-region") + 1] == "DE", preset.Name + " country value");
+            Check(!Aether.CreateStartInfo(preset, new()).ArgumentList.Contains("--psiphon-region"), preset.Name + " Automatic adds no flag");
+        }
+        foreach (var json in new[] { "[\"--psiphon-region\",\"US\"]", "[\"--psiphon-region=US\"]" })
+        {
+            var expert = CoreOptions.Parse(json, "{}", 300, "DE");
+            var args = Aether.CreateStartInfo(new Preset("test", "--psiphon-only"), expert).ArgumentList;
+            Check(expert.HasPsiphonRegionOverride && !args.Contains("DE") && expert.Arguments.All(args.Contains), "Expert region flag preserved without conflict");
+        }
+        var envRegion = CoreOptions.Parse("[]", "{\"AETHER_PSIPHON_REGION\":\"US\"}", 300, "DE");
+        var envInfo = Aether.CreateStartInfo(new Preset("test", "--psiphon-only"), envRegion);
+        Check(!envInfo.ArgumentList.Contains("--psiphon-region") && envInfo.Environment["AETHER_PSIPHON_REGION"] == "US", "Expert region environment takes precedence");
         foreach (var value in new[] { "[\"--bind=0.0.0.0:80\"]", "[\"--tor\"]", "[null]", "[1]", "{}" })
         {
             bool rejected = false;
@@ -239,6 +301,11 @@ static class Checks
                     if (shot.GetPixel(x, y).ToArgb() == Palette.Connected.ToArgb()) green++;
             withStats.Close();
             Check(green > 0, "Auto order list draws per-protocol stats");
+        }
+        using (var countryForm = new CoreSettingsForm(countryOptions))
+        {
+            var selector = All(countryForm).OfType<ComboBox>().Single(c => c.AccessibleName == "Psiphon server country");
+            Check(selector.DropDownStyle == ComboBoxStyle.DropDownList && ((Psiphon.Country)selector.SelectedItem!).Code == "DE", "Country selector restores saved choice");
         }
         using var settings = new CoreSettingsForm(new());
         var delayToggle = All(settings).OfType<CheckBox>().Single(c => c.AccessibleName == "Real delay test");
