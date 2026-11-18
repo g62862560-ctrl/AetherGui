@@ -22,9 +22,5 @@
 
 ## Credits
 
-- **[g62862560-ctrl](https://github.com/g62862560-ctrl)** — AetherGui development, implementation, and customization.
-- **[CluvexStudio/Aether](https://github.com/CluvexStudio/Aether)** — Original Aether project, design, and inspiration.
-
-Special thanks to CluvexStudio for their original work.
-
-AetherGui builds upon the ideas and foundation of Aether, with additional development and improvements.
+- **[g62862560-ctrl](https://github.com/g62862560-ctrl)**
+- **[CluvexStudio/Aether](https://github.com/CluvexStudio/Aether)**
