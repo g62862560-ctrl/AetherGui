@@ -3,9 +3,9 @@
 
 <table>
   <tr>
-    <th width="30%">Desktop - Main</th>
-    <th width="30%">Desktop - Settings</th>
-    <th width="40%">Android</th>
+    <th width="33%">Desktop - Main</th>
+    <th width="33%">Desktop - Settings</th>
+    <th width="33%">Android</th>
   </tr>
   <tr>
     <td align="center">
