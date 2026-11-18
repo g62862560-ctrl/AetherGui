@@ -14,6 +14,7 @@ static class TunMode
     private const string Ip = "198.18.0.1";
     private const string Mask = "255.254.0.0";
     private const string Dns = "1.1.1.1";
+    internal static readonly string[] TunRoutes = ["0.0.0.0/1", "128.0.0.0/1"];
     private const string KeyPath = @"Software\AetherGui";
     private static readonly string Dir = Path.Combine(AppContext.BaseDirectory, "tun2socks");
     private static readonly string Exe = Path.Combine(Dir, "tun2socks.exe");
@@ -45,8 +46,23 @@ static class TunMode
     }
 
     private static Process? _proc;
+    private static bool _routesAdded;
 
-    // Interface, next hop and metric of the active default route on a real adapter: another TUN
+    internal static string PowerShell(string script)
+    {
+        // EncodedCommand preserves quotes inside the script across Windows argument parsing.
+        var encoded = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script));
+        using var p = Process.Start(new ProcessStartInfo("powershell.exe", "-NoProfile -NonInteractive -EncodedCommand " + encoded)
+        { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true })!;
+        var errors = p.StandardError.ReadToEndAsync();
+        var output = p.StandardOutput.ReadToEnd();
+        p.WaitForExit();
+        var error = errors.GetAwaiter().GetResult();
+        if (p.ExitCode != 0) throw new InvalidOperationException("TUN PowerShell query failed: " + error.Trim());
+        return output;
+    }
+
+    // Interface and next hop of the active default route on a real adapter: another TUN
     // (sing-box, a VPN) must not be mistaken for the physical one.
     private static (string Name, string Gateway)? PhysicalRoute()
     {
@@ -56,40 +72,79 @@ static class TunMode
             "if (-not $a) { continue }; " +
             "if ($a.InterfaceDescription -match 'Wintun' -or $a.Name -match 'tun') { continue }; " +
             "Write-Output ($a.Name + '|' + $x.NextHop); break }";
-        using var p = Process.Start(new ProcessStartInfo("powershell.exe", "-NoProfile -Command \"" + cmd + "\"")
-        { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })!;
-        var parts = p.StandardOutput.ReadToEnd().Trim().Split('|');
-        p.WaitForExit();
+        var parts = PowerShell(cmd).Trim().Split('|');
         return parts.Length == 2 && parts[0].Length > 0 && parts[1] is not ("0.0.0.0" or "")
             ? (parts[0], parts[1]) : null;
     }
 
-    private static bool AdapterUp() =>
-        NetworkInterface.GetAllNetworkInterfaces().Any(n => n.Name == Adapter && n.OperationalStatus == OperationalStatus.Up);
+    internal static string PsLiteral(string value) => "'" + value.Replace("'", "''") + "'";
+
+    private static HashSet<string> RoutesOn(string iface, string gateway)
+    {
+        var cmd = "Get-NetRoute -AddressFamily IPv4 -PolicyStore ActiveStore -ErrorAction Stop | " +
+                  "Where-Object { $_.InterfaceAlias -eq " + PsLiteral(iface) +
+                  " -and $_.NextHop -eq " + PsLiteral(gateway) + " } | Select-Object -ExpandProperty DestinationPrefix";
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in PowerShell(cmd).Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+            set.Add(line.Trim());
+        return set;
+    }
 
     // Wintun never answers duplicate-address detection, so the address lingers Tentative for a moment;
     // a route added before it turns Preferred is silently ignored.
-    private static bool AddressPreferred()
-    {
-        const string cmd = "Get-NetIPAddress -InterfaceAlias " + Adapter + " -AddressFamily IPv4 -ErrorAction SilentlyContinue | " +
-                           "Select-Object -First 1 -ExpandProperty AddressState";
-        using var p = Process.Start(new ProcessStartInfo("powershell.exe", "-NoProfile -Command \"" + cmd + "\"")
-        { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })!;
-        return p.StandardOutput.ReadToEnd().Trim() == "Preferred";
-    }
+    private static bool AddressPreferred() =>
+        PowerShell("Get-NetIPAddress -InterfaceAlias " + Adapter + " -AddressFamily IPv4 -ErrorAction SilentlyContinue | " +
+                   "Select-Object -First 1 -ExpandProperty AddressState").Trim() == "Preferred";
 
+    private static bool AdapterUp() =>
+        NetworkInterface.GetAllNetworkInterfaces().Any(n => n.Name == Adapter && n.OperationalStatus == OperationalStatus.Up);
+
+    // netsh writes its errors to stdout, not stderr.
     private static bool Netsh(string args, Action<string> log)
     {
         using var p = Process.Start(new ProcessStartInfo("netsh.exe", "interface ipv4 " + args)
         { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true })!;
-        var err = p.StandardError.ReadToEnd();
+        var output = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
         p.WaitForExit();
         if (p.ExitCode == 0) return true;
-        log($"TUN setup failed: netsh {args}: {err.Trim()}");
+        log($"TUN setup failed: netsh {args}: {output.Trim()}");
         return false;
     }
 
+    private static void NetshQuiet(string args)
+    {
+        try
+        {
+            using var p = Process.Start(new ProcessStartInfo("netsh.exe", "interface ipv4 " + args)
+            { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true })!;
+            p.WaitForExit(3000);
+        }
+        catch { }
+    }
+
+    private static readonly object Sync = new();
+
+    public static Task EnableAsync(int port, Action<string> log, CancellationToken ct) => Task.Run(() =>
+    {
+        lock (Sync)
+        {
+            ct.ThrowIfCancellationRequested();
+            Enable(port, log);
+            if (ct.IsCancellationRequested) { Disable(); ct.ThrowIfCancellationRequested(); }
+        }
+    }, ct);
+
     public static void Enable(int port, Action<string> log)
+    {
+        try { EnableCore(port, log); }
+        catch (Exception ex)
+        {
+            log("TUN setup failed: " + ex.Message);
+            try { Disable(); } catch (Exception cleanup) { log("TUN cleanup failed: " + cleanup.Message); }
+        }
+    }
+
+    private static void EnableCore(int port, Action<string> log)
     {
         if (_proc is { HasExited: false }) return;
         if (!Available) { log("TUN mode unavailable: tun2socks.exe / wintun.dll missing beside the app."); return; }
@@ -118,17 +173,40 @@ static class TunMode
         if (!Netsh($"set address name=\"{Adapter}\" static {Ip} {Mask}", log)
             || !Netsh($"set dnsservers name=\"{Adapter}\" static {Dns} primary", log))
         { Disable(); return; }
-        Netsh($"set interface \"{Adapter}\" metric=1", log); // the effective cost is route + interface metric
+        if (!Netsh($"set interface \"{Adapter}\" metric=1", log))
+        { Disable(); return; } // the effective cost is route + interface metric
         for (var i = 0; i < 20 && !AddressPreferred(); i++) Thread.Sleep(250);
         if (!AddressPreferred()) { log("TUN setup failed: the adapter address never became usable."); Disable(); return; }
+
+        var existing = RoutesOn(route.Value.Name, route.Value.Gateway);
+        _routesAdded = true; // include partial setup in cleanup on failure
         foreach (var prefix in Bypass)
-            Netsh($"add route {prefix} \"{route.Value.Name}\" {route.Value.Gateway} metric=1", log);
-        // Well below the physical route's cost so the TUN wins without touching the other route.
-        Netsh($"add route 0.0.0.0/0 \"{Adapter}\" {Ip} metric=1", log);
-        log("TUN mode on: all apps route through aether (Cloudflare endpoints bypass the tunnel).");
+            if (!existing.Contains(prefix)
+                && !Netsh($"add route {prefix} \"{route.Value.Name}\" {route.Value.Gateway} metric=1 store=active", log))
+            { Disable(); return; }
+        // Wintun is a layer-3 device, not a gateway at its own address. On-link /1 routes
+        // beat the physical default without replacing it; specific endpoint bypasses still win.
+        foreach (var prefix in TunRoutes)
+            if (!RoutesOn(Adapter, "0.0.0.0").Contains(prefix)
+                && !Netsh($"add route {prefix} \"{Adapter}\" nexthop=0.0.0.0 metric=1 store=active", log))
+            { Disable(); return; }
+        var missingTun = TunRoutes.Except(RoutesOn(Adapter, "0.0.0.0")).ToArray();
+        var missingBypass = Bypass.Except(RoutesOn(route.Value.Name, route.Value.Gateway)).ToArray();
+        if (missingTun.Length > 0 || missingBypass.Length > 0)
+        {
+            log("TUN setup failed: missing on-link routes: " + string.Join(", ", missingTun)
+                + "; missing bypass routes: " + string.Join(", ", missingBypass));
+            Disable(); return;
+        }
+        log("TUN mode on: IPv4 routes configured (Cloudflare ranges bypass the tunnel; IPv6 is not tunneled).");
     }
 
     public static void Disable()
+    {
+        lock (Sync) DisableCore();
+    }
+
+    private static void DisableCore()
     {
         var proc = _proc;
         _proc = null;
@@ -137,7 +215,9 @@ static class TunMode
             try { if (!proc.HasExited) { proc.Kill(true); proc.WaitForExit(3000); } } catch { }
             proc.Dispose();
         }
-        Cleanup();
+        if (!_routesAdded) return;
+        _routesAdded = false;
+        RemoveRoutes();
     }
 
     // Crash cleanup: also runs in the watchdog copy, which never has a live _proc reference.
@@ -145,13 +225,18 @@ static class TunMode
     {
         foreach (var p in Process.GetProcessesByName("tun2socks"))
             try { if (p.MainModule?.FileName == Exe) { p.Kill(true); p.WaitForExit(3000); } } catch { }
-        if (!IsAdmin) return; // removing the route needs elevation
-        try
-        {
-            using var n = Process.Start(new ProcessStartInfo("netsh.exe", $"interface ipv4 delete route 0.0.0.0/0 \"{Adapter}\" {Ip}")
-            { UseShellExecute = false, CreateNoWindow = true })!;
-            n.WaitForExit(3000);
-        }
-        catch { }
+        RemoveRoutes();
+    }
+
+    private static void RemoveRoutes()
+    {
+        if (!IsAdmin) return; // editing routes needs elevation
+        NetshQuiet($"delete route 0.0.0.0/0 \"{Adapter}\" {Ip}"); // legacy route
+        foreach (var prefix in TunRoutes)
+            NetshQuiet($"delete route {prefix} \"{Adapter}\" nexthop=0.0.0.0 store=active");
+        var route = PhysicalRoute();
+        if (route is not null)
+            foreach (var prefix in Bypass)
+                NetshQuiet($"delete route {prefix} \"{route.Value.Name}\" {route.Value.Gateway}");
     }
 }
