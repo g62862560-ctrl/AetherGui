@@ -5,71 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:aether_gui/aether.dart';
 import 'package:aether_gui/main.dart';
-import 'package:aether_gui/localization.dart';
 
 void main() {
-  testWidgets('language selector is ordered, persisted, and switches to RTL', (
-    tester,
-  ) async {
-    final dir = Directory.systemTemp.createTempSync('aether-locale-ui-');
-    Aether.dir = dir.path;
-    Aether.exe = '${dir.path}/missing-core';
-    final controller = LocaleController(defaultLocaleStore(dir.path));
-    addTearDown(() => dir.deleteSync(recursive: true));
-
-    await tester.pumpWidget(
-      LocalizedApp(
-        controller: controller,
-        theme: Palette.theme,
-        home: const HomePage(),
-      ),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Settings'));
-    await tester.pumpAndSettle();
-
-    final selector = find.byKey(const Key('languageSelector'));
-    expect(selector, findsOneWidget);
-    expect(tester.getSize(selector).height, greaterThanOrEqualTo(48));
-    await tester.tap(selector);
-    await tester.pumpAndSettle();
-    final labels = ['English', 'Persian', 'Iraqi Arabic'];
-    for (final label in labels) {
-      expect(find.text(label), findsWidgets);
-    }
-    expect(
-      labels
-          .map((label) => tester.getTopLeft(find.text(label).last).dy)
-          .toList(),
-      orderedEquals(
-        labels
-            .map((label) => tester.getTopLeft(find.text(label).last).dy)
-            .toList()
-          ..sort(),
-      ),
-    );
-
-    await tester.tap(find.text('Persian').last);
-    await tester.pumpAndSettle();
-    expect(controller.locale, AppLocales.persian);
-    expect(find.text('تنظیمات'), findsWidgets);
-    expect(find.text('زبان'), findsWidgets);
-    expect(
-      Directionality.of(tester.element(find.byType(Scaffold).last)),
-      TextDirection.rtl,
-    );
-    expect(File('${dir.path}/locale.txt').readAsStringSync(), 'fa');
-
-    await tester.tap(selector);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('عربی عراقی').last);
-    await tester.pumpAndSettle();
-    expect(controller.locale, AppLocales.iraqiArabic);
-    expect(find.text('الإعدادات'), findsWidgets);
-    expect(find.text('اللغة'), findsWidgets);
-    expect(File('${dir.path}/locale.txt').readAsStringSync(), 'ar-IQ');
-  });
-
   testWidgets(
     'VPN revocation stops the connection and explains what happened',
     (tester) async {

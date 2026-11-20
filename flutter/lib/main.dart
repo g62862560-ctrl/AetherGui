@@ -12,20 +12,25 @@ import 'core_options.dart';
 import 'core_settings_page.dart';
 import 'diagnostics.dart';
 import 'exit_info.dart';
-import 'localization.dart';
 import 'psiphon_countries.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Aether.init();
-  final localeController = LocaleController(defaultLocaleStore(Aether.dir));
-  await localeController.load(
-    systemLocale: WidgetsBinding.instance.platformDispatcher.locale,
-  );
   runApp(
-    LocalizedApp(
-      controller: localeController,
+    MaterialApp(
+      title: 'Aether VPN',
+      debugShowCheckedModeBanner: false,
       theme: Palette.theme,
+      // Keeps layouts intact when the system font size is very large.
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(
+          textScaler: MediaQuery.textScalerOf(
+            context,
+          ).clamp(maxScaleFactor: 1.3),
+        ),
+        child: child!,
+      ),
       home: const HomePage(),
     ),
   );
@@ -91,7 +96,6 @@ class _HomePageState extends State<HomePage> {
   Cancel? _ct, _attempt;
   bool _nextRequested = false;
   bool _autoConnect = false;
-  LocaleController? _localeController;
   CoreOptions _coreOptions = const CoreOptions();
   int _preset = -1; // index into Aether.presets, -1 = Auto (rotate through all)
   int _trySeconds = Aether.fastSecs;
@@ -963,17 +967,15 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     final busy = _ct != null;
-    final l10n = context.l10n;
-    _localeController ??= LocaleScope.maybeOf(context);
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          l10n.appName,
-          style: const TextStyle(fontWeight: FontWeight.w700),
+        title: const Text(
+          'Aether',
+          style: TextStyle(fontWeight: FontWeight.w700),
         ),
         actions: [
           IconButton(
-            tooltip: l10n.settings,
+            tooltip: 'Settings',
             icon: const Icon(Icons.settings_outlined),
             onPressed: _openSettings,
           ),
@@ -1023,7 +1025,7 @@ class _HomePageState extends State<HomePage> {
                           enabled: !busy,
                           keyboardType: TextInputType.number,
                           decoration: InputDecoration(
-                            labelText: l10n.text('autoTrySeconds'),
+                            labelText: 'Auto try (seconds)',
                             errorText:
                                 (int.tryParse(_trySecondsText.text) ?? 0) >=
                                         5 &&
@@ -1056,7 +1058,7 @@ class _HomePageState extends State<HomePage> {
                       key: const Key('reconnectVpn'),
                       onPressed: _connect,
                       icon: const Icon(Icons.refresh_rounded),
-                      label: Text(l10n.text('reconnectAether')),
+                      label: const Text('Reconnect Aether'),
                     ),
                     const SizedBox(height: 8),
                   ],
@@ -1153,9 +1155,9 @@ class _HomePageState extends State<HomePage> {
 
   Widget _nextButton(bool busy) => _tonalAction(
     key: const Key('nextProtocol'),
-    tooltip: context.l10n.text('nextProtocol'),
+    tooltip: 'Next protocol',
     icon: Icons.skip_next_rounded,
-    label: context.l10n.text('next'),
+    label: 'Next',
     background: Palette.nextBg,
     foreground: Palette.next,
     onPressed: busy ? _nextProtocol : null,
@@ -1180,17 +1182,16 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _powerButton(bool busy) {
-    final l10n = context.l10n;
     final connected = _statusColor == seaGreen;
     final icon = connected
         ? Icons.shield_rounded
         : Icons.power_settings_new_rounded;
     return Semantics(
       label: connected
-          ? l10n.text('connected')
+          ? 'Connected'
           : busy
-          ? l10n.text('connectingCancel')
-          : l10n.connect,
+          ? 'Connecting, tap to cancel'
+          : 'Connect',
       // Square toggle button filled with the status color; while connecting it drifts through light colors.
       child: SizedBox(
         height: _actionHeight,
@@ -1200,13 +1201,13 @@ class _HomePageState extends State<HomePage> {
                 builder: (t) => _squareButton(
                   _lightColorAt(t),
                   Icons.close_rounded,
-                  l10n.text('cancel'),
+                  'Cancel',
                 ),
               )
             : _squareButton(
                 _statusColor,
                 icon,
-                connected ? l10n.text('connected') : l10n.connect,
+                connected ? 'Connected' : 'Connect',
               ),
       ),
     );
@@ -1216,9 +1217,7 @@ class _HomePageState extends State<HomePage> {
   Widget _routeLine() {
     final route =
         _route ??
-        (_preset < 0
-            ? context.l10n.text('autoFastestRoute')
-            : Aether.presets[_preset].name);
+        (_preset < 0 ? 'Auto - fastest route' : Aether.presets[_preset].name);
     return Row(
       children: [
         const Icon(Icons.bolt_rounded, size: 20, color: Palette.accent),
@@ -1244,9 +1243,9 @@ class _HomePageState extends State<HomePage> {
   // Round button: forget learned speeds and the saved order, go back to Auto, then connect.
   Widget _resetConnectButton(bool busy) => _tonalAction(
     key: const Key('resetOrderConnect'),
-    tooltip: context.l10n.text('resetOrderAndConnect'),
+    tooltip: 'Reset order and connect',
     icon: Icons.restart_alt_rounded,
-    label: context.l10n.text('reset'),
+    label: 'Reset',
     background: Palette.resetBg,
     foreground: Palette.accent,
     onPressed: busy ? null : _resetOrderAndConnect,
@@ -1268,9 +1267,8 @@ class _HomePageState extends State<HomePage> {
 
   // The main connection choice stays on Home; Auto's detailed order remains in Settings.
   Widget _protocolMenu(bool busy) {
-    final l10n = context.l10n;
     final label = _preset < 0
-        ? l10n.text('autoOrderInSettings')
+        ? 'Auto (order in Settings)'
         : Aether.presets[_preset].label;
     return ListTile(
       key: const Key('connectionProtocol'),
@@ -1281,7 +1279,7 @@ class _HomePageState extends State<HomePage> {
       ),
       leading: const Icon(Icons.vpn_lock_outlined),
       title: Text(label),
-      subtitle: Text(l10n.text('tapToChooseOrDrag')),
+      subtitle: const Text('Tap to choose or drag to reorder'),
       trailing: const Icon(Icons.unfold_more_rounded),
       onTap: busy ? null : _editProtocolOrder,
     );
@@ -1437,54 +1435,52 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _quickSettings() {
-    final l10n = context.l10n;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              l10n.text('quickSettings'),
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+  Widget _quickSettings() => Card(
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Quick Settings',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 8),
+          SwitchListTile(
+            secondary: const Icon(Icons.bolt_outlined, color: Palette.accent),
+            title: const Text('Auto-Connect on Startup'),
+            value: _autoConnect,
+            onChanged: (v) {
+              setState(() => _autoConnect = v);
+              _saveSettings();
+            },
+          ),
+          // Android, not the app, can block traffic while the VPN is down, so this opens its setting.
+          const ListTile(
+            leading: Icon(Icons.block_rounded, color: Palette.disconnected),
+            title: Text('Kill Switch'),
+            subtitle: Text(
+              'Turn on "Always-on VPN" and "Block connections without VPN"',
             ),
-            const SizedBox(height: 8),
-            SwitchListTile(
-              secondary: const Icon(Icons.bolt_outlined, color: Palette.accent),
-              title: Text(l10n.text('autoConnectStartup')),
-              value: _autoConnect,
-              onChanged: (v) {
-                setState(() => _autoConnect = v);
-                _saveSettings();
-              },
+            trailing: Icon(Icons.open_in_new_rounded, size: 20),
+            onTap: Aether.vpnSettings,
+          ),
+          ListTile(
+            leading: const Icon(Icons.battery_saver_rounded),
+            title: const Text('Background running'),
+            subtitle: const Text(
+              'Step-by-step guide for your phone to keep the VPN running with the screen off',
             ),
-            // Android, not the app, can block traffic while the VPN is down, so this opens its setting.
-            ListTile(
-              leading: const Icon(
-                Icons.block_rounded,
-                color: Palette.disconnected,
-              ),
-              title: Text(l10n.text('killSwitch')),
-              subtitle: Text(l10n.text('killSwitchSubtitle')),
-              trailing: const Icon(Icons.open_in_new_rounded, size: 20),
-              onTap: Aether.vpnSettings,
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const BatteryGuidePage()),
             ),
-            ListTile(
-              leading: const Icon(Icons.battery_saver_rounded),
-              title: Text(l10n.text('batteryGuideTitle')),
-              subtitle: Text(l10n.text('backgroundRunningSubtitle')),
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const BatteryGuidePage()),
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
-    );
-  }
+    ),
+  );
 
   // What the current connect is doing, step by step, so a slow route does not look stuck.
   Widget _stepsCard(bool busy) => Card(
@@ -1496,9 +1492,9 @@ class _HomePageState extends State<HomePage> {
         initiallyExpanded: true,
         tilePadding: const EdgeInsets.fromLTRB(20, 0, 12, 0),
         childrenPadding: const EdgeInsets.fromLTRB(20, 0, 12, 12),
-        title: Text(
-          context.l10n.text('connectionSteps'),
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        title: const Text(
+          'Connection steps',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
         ),
         // Collapsed, the latest step still says what is happening.
         subtitle: Text(
@@ -1524,11 +1520,11 @@ class _HomePageState extends State<HomePage> {
               ),
             ),
           Align(
-            alignment: AlignmentDirectional.centerEnd,
+            alignment: Alignment.centerRight,
             child: TextButton.icon(
               onPressed: busy ? null : () => setState(_steps.clear),
               icon: const Icon(Icons.close_rounded, size: 18),
-              label: Text(context.l10n.text('clear')),
+              label: const Text('Clear'),
             ),
           ),
         ],
@@ -1597,17 +1593,17 @@ class _HomePageState extends State<HomePage> {
               const SizedBox(width: 12),
               Expanded(child: SelectableText(error)),
               IconButton(
-                tooltip: context.l10n.text('copyError'),
+                tooltip: 'Copy error',
                 icon: const Icon(Icons.copy_rounded, size: 20),
                 onPressed: () {
                   Clipboard.setData(ClipboardData(text: error));
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text(context.l10n.text('errorCopied'))),
-                  );
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(const SnackBar(content: Text('Error copied')));
                 },
               ),
               IconButton(
-                tooltip: context.l10n.text('dismissError'),
+                tooltip: 'Dismiss error',
                 icon: const Icon(Icons.close_rounded, size: 20),
                 onPressed: () => setState(_clearError),
               ),
@@ -1666,13 +1662,6 @@ class _HomePageState extends State<HomePage> {
 
   Widget _settingsPage(BuildContext context) {
     final busy = _ct != null;
-    final l10n = context.l10n;
-    final localeController = _localeController;
-    String languageName(Locale locale) {
-      if (locale == AppLocales.persian) return l10n.persian;
-      if (locale == AppLocales.iraqiArabic) return l10n.iraqiArabic;
-      return l10n.english;
-    }
 
     // A white line above each section title separates the sections.
     Widget section(String title) => Padding(
@@ -1693,39 +1682,18 @@ class _HomePageState extends State<HomePage> {
       ),
     );
     return Scaffold(
-      appBar: AppBar(title: Text(l10n.settings)),
+      appBar: AppBar(title: const Text('Settings')),
       body: ListView(
-        padding: const EdgeInsetsDirectional.fromSTEB(24, 0, 24, 24),
+        padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
         children: [
-          section(l10n.language),
-          DropdownButtonFormField<Locale>(
-            key: const Key('languageSelector'),
-            initialValue: localeController?.locale ?? AppLocales.english,
-            isExpanded: true,
-            decoration: InputDecoration(
-              labelText: l10n.language,
-              border: const OutlineInputBorder(),
-            ),
-            items: [
-              for (final locale in AppLocales.supported)
-                DropdownMenuItem(
-                  value: locale,
-                  child: Text(languageName(locale)),
-                ),
-            ],
-            onChanged: (locale) {
-              if (locale != null) localeController?.setLocale(locale);
-            },
-          ),
-          const SizedBox(height: 8),
-          section(l10n.text('connection')),
+          section('Connection'),
           DropdownButtonFormField<String>(
             key: ValueKey('psiphon-country-${_coreOptions.psiphonRegion}'),
             initialValue: _coreOptions.psiphonRegion,
             isExpanded: true,
-            decoration: InputDecoration(
-              labelText: l10n.text('psiphonServerCountry'),
-              border: const OutlineInputBorder(),
+            decoration: const InputDecoration(
+              labelText: 'Psiphon server country',
+              border: OutlineInputBorder(),
             ),
             items: [
               for (final country in psiphonCountries)
@@ -1768,7 +1736,7 @@ class _HomePageState extends State<HomePage> {
           const SizedBox(height: 16),
           ListTile(
             leading: const Icon(Icons.low_priority_rounded),
-            title: Text(l10n.text('autoOrder')),
+            title: const Text('Auto order'),
             subtitle: Text(
               Aether.autoOrder(
                 _connectMs,
@@ -1780,18 +1748,18 @@ class _HomePageState extends State<HomePage> {
             onTap: _showAutoOrder,
           ),
           const SizedBox(height: 16),
-          Text(l10n.text('serverSearch')),
+          const Text('Server search'),
           const SizedBox(height: 8),
           SegmentedButton<String>(
-            segments: [
+            segments: const [
               ButtonSegment(
                 value: 'turbo',
-                label: Text(l10n.text('fast')),
+                label: Text('Fast'),
                 tooltip: 'First server that answers',
               ),
               ButtonSegment(
                 value: 'balanced',
-                label: Text(l10n.text('balanced')),
+                label: Text('Balanced'),
                 tooltip: 'Tries a few servers, keeps the fastest',
               ),
             ],
@@ -1806,8 +1774,10 @@ class _HomePageState extends State<HomePage> {
           const SizedBox(height: 16),
           SwitchListTile(
             secondary: const Icon(Icons.network_check_rounded),
-            title: Text(l10n.text('realDelayTest')),
-            subtitle: Text(l10n.text('realDelayTestSubtitle')),
+            title: const Text('Real delay test'),
+            subtitle: const Text(
+              'Verify internet access and measure delay. When off, only the local proxy is checked.',
+            ),
             value: _realDelayTest,
             onChanged: busy
                 ? null
@@ -1822,7 +1792,7 @@ class _HomePageState extends State<HomePage> {
             enabled: _realDelayTest,
             keyboardType: TextInputType.url,
             decoration: InputDecoration(
-              labelText: l10n.text('delayTestUrl'),
+              labelText: 'Delay test URL',
               helperText: 'Any http(s) page; the ping is how long it takes',
               errorText: _realDelayTest
                   ? Aether.testUrlError(_testUrlText.text)
@@ -1850,18 +1820,18 @@ class _HomePageState extends State<HomePage> {
             },
           ),
           const SizedBox(height: 16),
-          Text(l10n.text('mode')),
+          const Text('Mode'),
           const SizedBox(height: 8),
           SegmentedButton<bool>(
-            segments: [
+            segments: const [
               ButtonSegment(
                 value: true,
-                label: Text(l10n.text('vpnAllApps')),
+                label: Text('VPN (all apps)'),
                 tooltip: 'Full-device tunnel: every app goes through aether',
               ),
               ButtonSegment(
                 value: false,
-                label: Text(l10n.text('proxyOnly')),
+                label: Text('Proxy only'),
                 tooltip: 'No VPN: only apps set to the local proxy use aether',
               ),
             ],
@@ -1879,7 +1849,7 @@ class _HomePageState extends State<HomePage> {
               children: [
                 Expanded(
                   child: _portField(
-                    l10n.text('httpPort'),
+                    'HTTP port',
                     _httpPortText,
                     () => Aether.socksPort,
                     (p) => Aether.httpPort = p,
@@ -1889,7 +1859,7 @@ class _HomePageState extends State<HomePage> {
                 const SizedBox(width: 16),
                 Expanded(
                   child: _portField(
-                    l10n.text('socksPort'),
+                    'SOCKS5 port',
                     _socksPortText,
                     () => Aether.httpPort,
                     (p) => Aether.socksPort = p,
@@ -1899,44 +1869,44 @@ class _HomePageState extends State<HomePage> {
               ],
             ),
           ],
-          section(l10n.text('advanced')),
+          section('Advanced'),
           ListTile(
             leading: const Icon(Icons.tune_rounded),
-            title: Text(l10n.text('coreSettings')),
+            title: const Text('Core settings'),
             enabled: !busy,
             onTap: _showCoreSettings,
           ),
           ListTile(
             leading: const Icon(Icons.keyboard_outlined),
-            title: Text(l10n.text('coreInput')),
-            subtitle: Text(l10n.text('coreInputSubtitle')),
+            title: const Text('Core input'),
+            subtitle: const Text('Send a sign-in code the core asks for'),
             enabled: busy,
             onTap: _sendCoreInput,
           ),
           ListTile(
             leading: const Icon(Icons.info_outline_rounded),
-            title: Text(l10n.text('proxyInfo')),
+            title: const Text('Proxy info'),
             onTap: _showProxyInfo,
           ),
           ListTile(
             leading: const Icon(Icons.system_update_outlined),
-            title: Text(l10n.text('checkForUpdates')),
+            title: const Text('Check for updates'),
             onTap: () => _checkUpdates(interactive: true),
           ),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             secondary: const Icon(Icons.receipt_long_outlined),
-            title: Text(l10n.text('showActivityLog')),
+            title: const Text('Show activity log'),
             value: _showActivity,
             onChanged: (value) {
               setState(() => _showActivity = value);
               _saveSettings();
             },
           ),
-          section(l10n.text('diagnostics')),
-          Text(
-            l10n.text('diagnosticsHelp'),
-            style: const TextStyle(color: Palette.secondaryText),
+          section('Diagnostics'),
+          const Text(
+            'Reports stay on this device unless you copy them. Credentials and common tokens are redacted, and only recent activity is retained.',
+            style: TextStyle(color: Palette.secondaryText),
           ),
           const SizedBox(height: 8),
           Wrap(
@@ -1947,18 +1917,18 @@ class _HomePageState extends State<HomePage> {
                 key: const Key('copyDiagnostics'),
                 onPressed: _copyDiagnosticReport,
                 icon: const Icon(Icons.copy_rounded),
-                label: Text(l10n.text('copyReport')),
+                label: const Text('Copy report'),
               ),
               OutlinedButton.icon(
                 key: const Key('saveDiagnostics'),
                 onPressed: _saveDiagnosticReport,
                 icon: const Icon(Icons.save_alt_rounded),
-                label: Text(l10n.text('saveLocally')),
+                label: const Text('Save locally'),
               ),
             ],
           ),
           if (_showActivity) ...[
-            section(l10n.text('activity')),
+            section('Activity'),
             Card(
               clipBehavior: Clip.antiAlias,
               child: SizedBox(
@@ -1967,9 +1937,9 @@ class _HomePageState extends State<HomePage> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Align(
-                      alignment: AlignmentDirectional.centerEnd,
+                      alignment: Alignment.centerRight,
                       child: IconButton(
-                        tooltip: l10n.text('clearActivity'),
+                        tooltip: 'Clear activity',
                         onPressed: _lines.isEmpty
                             ? null
                             : () => setState(() {
@@ -1989,7 +1959,7 @@ class _HomePageState extends State<HomePage> {
                             padding: const EdgeInsets.only(bottom: 4),
                             child: Text(
                               _lines.isEmpty
-                                  ? l10n.text('waitingForLogs')
+                                  ? 'Waiting for logs...'
                                   : _lines[i].$1,
                               style: TextStyle(
                                 color: _lines.isEmpty
