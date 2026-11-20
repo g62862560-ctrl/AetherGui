@@ -1004,13 +1004,9 @@ class _HomePageState extends State<HomePage> {
                   ),
                   const SizedBox(height: 16),
                   _routeLine(),
-                  // Once connected, the exit hop and numbers sit in small cards instead of one crowded line.
+                  // Once connected, stats sit in small cards; the exit country flag is on the route row.
                   if (_statusColor == seaGreen) ...[
                     const SizedBox(height: 12),
-                    if (_exitInfo != null) ...[
-                      _exitCard(),
-                      const SizedBox(height: 8),
-                    ],
                     _statCards(),
                   ],
                   const SizedBox(height: 12),
@@ -1218,27 +1214,24 @@ class _HomePageState extends State<HomePage> {
     final route =
         _route ??
         (_preset < 0 ? 'Auto - fastest route' : Aether.presets[_preset].name);
+    final flag = _statusColor == seaGreen && _exitInfo != null
+        ? formatExitFlag(_exitInfo!)
+        : null;
     return Row(
       children: [
         const Icon(Icons.bolt_rounded, size: 20, color: Palette.accent),
         const SizedBox(width: 8),
         Flexible(child: Text(route, overflow: TextOverflow.ellipsis)),
+        if (flag != null) ...[
+          const SizedBox(width: 8),
+          Semantics(
+            label: 'Exit country: ${exitCountryName(_exitInfo!.countryCode)}',
+            child: Text(flag, style: const TextStyle(fontSize: 20)),
+          ),
+        ],
       ],
     );
   }
-
-  // The tunnel's exit hop, parsed from the core's per-tunnel "exit:" line.
-  Widget _exitCard() => Card(
-    key: const Key('exitInfo'),
-    child: Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-      child: Text(
-        formatExit(_exitInfo!),
-        textAlign: TextAlign.center,
-        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-      ),
-    ),
-  );
 
   // Round button: forget learned speeds and the saved order, go back to Auto, then connect.
   Widget _resetConnectButton(bool busy) => _tonalAction(

@@ -65,6 +65,19 @@ void main() {
     expect(exitCountryFlag('de'), '🇩🇪');
   });
 
+  test('compact connected badge shows only the country flag', () {
+    final exit = const ExitInfo(
+      ip: '104.28.214.161',
+      countryCode: 'IR',
+      colo: 'FRA',
+      latencyMs: 448,
+      warp: true,
+    );
+    expect(formatExitFlag(exit), '🇮🇷');
+    expect(formatExitFlag(exit), isNot(contains(exit.ip)));
+    expect(formatExitFlag(exit), isNot(contains('IR')));
+  });
+
   test('formats the C# ShowExit display string', () {
     expect(
       formatExit(

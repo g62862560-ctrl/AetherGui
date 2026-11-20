@@ -88,6 +88,9 @@ String exitCountryFlag(String code) {
   return String.fromCharCodes(cc.codeUnits.map((c) => 0x1F1E6 + c - 65));
 }
 
+/// Compact connected-state badge: only the country flag, never the exit IP.
+String formatExitFlag(ExitInfo exit) => exitCountryFlag(exit.countryCode);
+
 /// C# ShowExit's display string: "{flag} {country} · {ip}", then latency and WARP.
 String formatExit(ExitInfo exit) {
   final text = StringBuffer(
