@@ -1,82 +1,101 @@
 import 'package:flutter/material.dart';
 
 import 'aether.dart';
+import 'localization.dart';
 
 typedef AutoOrderResult = ({List<int> order, List<int> checked});
 
-String _ago(int epochSeconds) {
+String _format(BuildContext context, String key, String name, Object value) =>
+    context.l10n.text(key).replaceAll('{$name}', '$value');
+
+String _ago(BuildContext context, int epochSeconds) {
   final s = DateTime.now().millisecondsSinceEpoch ~/ 1000 - epochSeconds;
-  if (s < 3600) return s < 60 ? 'just now' : '${s ~/ 60}m ago';
-  if (s < 86400) return '${s ~/ 3600}h ago';
-  return '${s ~/ 86400}d ago';
+  if (s < 60) return context.l10n.text('justNow');
+  if (s < 3600) return _format(context, 'minutesAgo', 'count', s ~/ 60);
+  if (s < 86400) return _format(context, 'hoursAgo', 'count', s ~/ 3600);
+  return _format(context, 'daysAgo', 'count', s ~/ 86400);
 }
 
 // Verdict first (the answer), then the numbers behind it; used in this list and on Home once connected.
-Widget protocolStatLine(ProtocolStat st, {double fontSize = 12}) {
-  final (verdict, color) = switch (st.verdict) {
-    'good' => ('Works for you', const Color(0xFF4ADE80)),
-    'bad' => ('Often fails', const Color(0xFFF87171)),
-    'maybe' => ('Too few tries', const Color(0xFFFBBF24)),
-    _ => ('Not tried yet', Colors.grey),
-  };
-  const green = Color(0xFF4ADE80),
-      red = Color(0xFFF87171),
-      amber = Color(0xFFFBBF24),
-      muted = Color(0xFFA9A4B8);
-  // Each number carries its own meaning color: ok green, failures red, success rate and speed by thresholds.
-  TextSpan part(String text, Color c) => TextSpan(
-    text: text,
-    style: TextStyle(color: c, fontWeight: FontWeight.w600),
-  );
-  const dot = TextSpan(
-    text: ' · ',
-    style: TextStyle(color: muted),
-  );
-  final rate = st.tries == 0 ? 0 : st.ok * 100 ~/ st.tries;
-  final avg = st.avgMs / 1000;
-  return Text.rich(
-    TextSpan(
-      children: [
-        TextSpan(
-          text: verdict,
-          style: TextStyle(color: color, fontWeight: FontWeight.w600),
-        ),
-        if (st.tries > 0) ...[
-          const TextSpan(text: '\n'),
-          part('${st.ok} ok', st.ok > 0 ? green : muted),
-          dot,
-          part('${st.fail} failed', st.fail > 0 ? red : muted),
-          dot,
-          part(
-            '$rate% success',
-            rate >= 60
-                ? green
-                : rate >= 30
-                ? amber
-                : red,
+Widget protocolStatLine(ProtocolStat st, {double fontSize = 12}) => Builder(
+  builder: (context) {
+    final (verdict, color) = switch (st.verdict) {
+      'good' => (context.l10n.text('worksForYou'), const Color(0xFF4ADE80)),
+      'bad' => (context.l10n.text('oftenFails'), const Color(0xFFF87171)),
+      'maybe' => (context.l10n.text('tooFewTries'), const Color(0xFFFBBF24)),
+      _ => (context.l10n.text('notTriedYet'), Colors.grey),
+    };
+    const green = Color(0xFF4ADE80),
+        red = Color(0xFFF87171),
+        amber = Color(0xFFFBBF24),
+        muted = Color(0xFFA9A4B8);
+    // Each number carries its own meaning color: ok green, failures red, success rate and speed by thresholds.
+    TextSpan part(String text, Color c) => TextSpan(
+      text: text,
+      style: TextStyle(color: c, fontWeight: FontWeight.w600),
+    );
+    const dot = TextSpan(
+      text: ' · ',
+      style: TextStyle(color: muted),
+    );
+    final rate = st.tries == 0 ? 0 : st.ok * 100 ~/ st.tries;
+    final avg = st.avgMs / 1000;
+    return Text.rich(
+      TextSpan(
+        children: [
+          TextSpan(
+            text: verdict,
+            style: TextStyle(color: color, fontWeight: FontWeight.w600),
           ),
-          if (st.ok > 0) ...[
+          if (st.tries > 0) ...[
+            const TextSpan(text: '\n'),
+            part(
+              _format(context, 'okCount', 'count', st.ok),
+              st.ok > 0 ? green : muted,
+            ),
             dot,
             part(
-              'avg ${avg.toStringAsFixed(1)}s',
-              avg < 5
+              _format(context, 'failedCount', 'count', st.fail),
+              st.fail > 0 ? red : muted,
+            ),
+            dot,
+            part(
+              _format(context, 'successRate', 'rate', rate),
+              rate >= 60
                   ? green
-                  : avg < 15
+                  : rate >= 30
                   ? amber
                   : red,
             ),
+            if (st.ok > 0) ...[
+              dot,
+              part(
+                _format(
+                  context,
+                  'averageSeconds',
+                  'seconds',
+                  avg.toStringAsFixed(1),
+                ),
+                avg < 5
+                    ? green
+                    : avg < 15
+                    ? amber
+                    : red,
+              ),
+            ],
+            if (st.lastOk > 0)
+              TextSpan(
+                text:
+                    ' · ${_format(context, 'lastOk', 'ago', _ago(context, st.lastOk))}',
+                style: const TextStyle(color: muted),
+              ),
           ],
-          if (st.lastOk > 0)
-            TextSpan(
-              text: ' · last ok ${_ago(st.lastOk)}',
-              style: const TextStyle(color: muted),
-            ),
         ],
-      ],
-    ),
-    style: TextStyle(fontSize: fontSize),
-  );
-}
+      ),
+      style: TextStyle(fontSize: fontSize),
+    );
+  },
+);
 
 // Which protocols Auto tries, top first. The app keeps this order current after each connect;
 // the user may drag or uncheck any of them. Pops the full list order and checked indexes on Save.
@@ -145,7 +164,7 @@ class _AutoOrderPageState extends State<AutoOrderPage> {
     final checked = _checked;
     if (checked.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Check at least one protocol for Auto.')),
+        SnackBar(content: Text(context.l10n.text('autoOrderEmpty'))),
       );
       return;
     }
@@ -155,28 +174,25 @@ class _AutoOrderPageState extends State<AutoOrderPage> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
-      title: const Text('Auto order'),
+      title: Text(context.l10n.text('autoOrder')),
       actions: [
         TextButton(
           onPressed: () => setState(() {
             _reset();
             _notify();
           }),
-          child: const Text('Reset'),
+          child: Text(context.l10n.text('reset')),
         ),
-        TextButton(onPressed: _save, child: const Text('Save')),
+        TextButton(onPressed: _save, child: Text(context.l10n.text('save'))),
       ],
     ),
     body: Column(
       children: [
-        const Padding(
-          padding: EdgeInsets.fromLTRB(24, 8, 24, 8),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
           child: Text(
-            'Auto tries the checked protocols from the top. After each try the app puts the '
-            'protocols that worked on top (best success rate, then fastest) and the ones that only '
-            'failed at the bottom; your own moves stay otherwise. '
-            'Drag the handle to reorder. Reset restores the speed ranking.',
-            style: TextStyle(fontSize: 13),
+            context.l10n.text('autoOrderHelp'),
+            style: const TextStyle(fontSize: 13),
           ),
         ),
         Expanded(

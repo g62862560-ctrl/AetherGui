@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'aether.dart';
+import 'localization.dart';
 
 enum PhoneBrand { samsung, xiaomi, huawei, oppo, vivo, stock }
 
@@ -30,91 +31,78 @@ List<GuideStep> guideFor(
   PhoneBrand brand,
   int sdk, {
   bool batteryDone = false,
+  AppLocalizations l10n = const AppLocalizations(AppLocales.english),
 }) {
+  String t(String key) => l10n.text(key);
   final unrestricted = sdk >= 31
       ? 'Unrestricted'
       : "Don't optimize / No restrictions";
-  return [
+  final steps = <GuideStep>[
     if (!batteryDone && sdk >= 23)
-      const GuideStep(
-        'Battery optimization',
-        'Find Aether in the list (choose "All apps" if needed) and set it to "Don\'t optimize".',
+      GuideStep(
+        t('batteryOptimization'),
+        t('batteryOptimizationBody'),
         setting: 'battery',
-        button: 'Open battery optimization',
+        button: t('openBatteryOptimization'),
       ),
     GuideStep(
-      'App battery usage',
-      'Open App info > Battery (or "App battery usage") and choose "$unrestricted".',
+      t('appBatteryUsage'),
+      t('appBatteryUsageBody').replaceAll('{mode}', unrestricted),
       setting: 'app',
-      button: 'Open App info',
+      button: t('openAppInfo'),
     ),
-    ...switch (brand) {
-      PhoneBrand.samsung => const [
-        GuideStep(
-          'Never sleeping apps',
-          'Settings > Battery > Background usage limits: take Aether out of "Sleeping apps" and "Deep sleeping apps", '
-              'and turn off "Put unused apps to sleep". Add Aether to "Never sleeping apps".',
-          setting: 'oem',
-          button: 'Open Samsung battery',
-        ),
-      ],
-      PhoneBrand.xiaomi => const [
-        GuideStep(
-          'Autostart',
-          'Turn on Autostart for Aether.',
-          setting: 'oem',
-          button: 'Open Autostart',
-        ),
-        GuideStep(
-          'Battery saver',
-          'In App info > Battery saver (or "Battery usage") choose "No restrictions". '
-              'Also open Recent apps, long-press the Aether card and tap the lock icon.',
-        ),
-      ],
-      PhoneBrand.huawei => const [
-        GuideStep(
-          'App launch',
-          'Settings > Apps > App launch: set Aether to "Manage manually" and turn on '
-              '"Auto-launch", "Secondary launch" and "Run in background".',
-          setting: 'oem',
-          button: 'Open App launch',
-        ),
-      ],
-      PhoneBrand.oppo => const [
-        GuideStep(
-          'Auto-launch',
-          'Allow Aether to auto-launch (Settings > Apps > Auto launch, or App info > "Allow auto launch").',
-          setting: 'oem',
-          button: 'Open Auto-launch',
-        ),
-        GuideStep(
-          'Background activity',
-          'In App info > Battery usage turn on "Allow background activity". '
-              'Lock Aether in Recent apps if your phone offers it.',
-        ),
-      ],
-      PhoneBrand.vivo => const [
-        GuideStep(
-          'Autostart',
-          'i Manager > Apps > Autostart (or Settings > Apps > Autostart): turn on Aether.',
-          setting: 'oem',
-          button: 'Open Autostart',
-        ),
-        GuideStep(
-          'Background power use',
-          'Settings > Battery > Background power consumption: allow Aether to run with high consumption.',
-        ),
-      ],
-      PhoneBrand.stock => const [
-        GuideStep(
-          'Adaptive battery',
-          'If the VPN still drops, check Settings > Battery for Battery Saver and turn it off while connected.',
-          setting: 'saver',
-          button: 'Open Battery Saver',
-        ),
-      ],
-    },
   ];
+  switch (brand) {
+    case PhoneBrand.samsung:
+      steps.add(
+        GuideStep(
+          t('neverSleepingApps'),
+          t('samsungBatteryBody'),
+          setting: 'oem',
+          button: t('openSamsungBattery'),
+        ),
+      );
+    case PhoneBrand.xiaomi:
+      steps.addAll([
+        GuideStep(
+          t('autostart'),
+          t('autostartBody'),
+          setting: 'oem',
+          button: t('openAutostart'),
+        ),
+        GuideStep(t('batterySaver'), t('xiaomiBatteryBody')),
+      ]);
+    case PhoneBrand.huawei:
+      steps.add(
+        GuideStep(
+          t('appLaunch'),
+          t('huaweiLaunchBody'),
+          setting: 'oem',
+          button: t('openAppLaunch'),
+        ),
+      );
+    case PhoneBrand.oppo:
+      steps.addAll([
+        GuideStep(
+          t('autoLaunch'),
+          t('oppoLaunchBody'),
+          setting: 'oem',
+          button: t('openAutoLaunch'),
+        ),
+        GuideStep(t('backgroundActivity'), t('oppoBackgroundBody')),
+      ]);
+    case PhoneBrand.vivo:
+      steps.add(
+        GuideStep(
+          t('backgroundActivity'),
+          t('vivoBackgroundBody'),
+          setting: 'oem',
+        ),
+      );
+    case PhoneBrand.stock:
+      break;
+  }
+  return steps;
 }
 
 class BatteryGuidePage extends StatefulWidget {
@@ -166,11 +154,7 @@ class _BatteryGuidePageState extends State<BatteryGuidePage>
     final ok = kind != 'app' && await Aether.openSetting('app');
     if (!ok && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Could not open it here. Search Settings for the name.',
-          ),
-        ),
+        SnackBar(content: Text(context.l10n.text('settingOpenFailed'))),
       );
     }
   }
@@ -181,28 +165,33 @@ class _BatteryGuidePageState extends State<BatteryGuidePage>
     final brand = _info.length > 1
         ? brandOf(_info[0], _info[1])
         : PhoneBrand.stock;
-    final steps = guideFor(brand, sdk, batteryDone: _ignored);
+    final steps = guideFor(
+      brand,
+      sdk,
+      batteryDone: _ignored,
+      l10n: context.l10n,
+    );
     final name = _info.length > 3
         ? '${_info[0]} · Android ${_info[3]}'
-        : 'this phone';
+        : context.l10n.text('thisPhone');
     return Scaffold(
-      appBar: AppBar(title: const Text('Background running')),
+      appBar: AppBar(title: Text(context.l10n.text('batteryGuideTitle'))),
       body: !_loaded
           ? const Center(child: CircularProgressIndicator())
           : ListView(
               padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
               children: [
-                Text('Steps for $name'),
+                Text(
+                  context.l10n.text('stepsFor').replaceAll('{device}', name),
+                ),
                 if (_ignored)
-                  const ListTile(
+                  ListTile(
                     contentPadding: EdgeInsets.zero,
-                    leading: Icon(
+                    leading: const Icon(
                       Icons.check_circle_rounded,
                       color: Colors.green,
                     ),
-                    title: Text(
-                      'Battery optimization is already off for Aether',
-                    ),
+                    title: Text(context.l10n.text('batteryAlreadyOff')),
                   ),
                 for (final (i, s) in steps.indexed)
                   Card(
@@ -220,10 +209,12 @@ class _BatteryGuidePageState extends State<BatteryGuidePage>
                           Text(s.body),
                           if (s.setting != null)
                             Align(
-                              alignment: Alignment.centerRight,
+                              alignment: AlignmentDirectional.centerEnd,
                               child: TextButton(
                                 onPressed: () => _open(s.setting!),
-                                child: Text(s.button ?? 'Open'),
+                                child: Text(
+                                  s.button ?? context.l10n.text('open'),
+                                ),
                               ),
                             ),
                         ],
@@ -231,12 +222,9 @@ class _BatteryGuidePageState extends State<BatteryGuidePage>
                     ),
                   ),
                 const SizedBox(height: 16),
-                const Text(
-                  'Only the battery optimization step can be checked by the app; the others cannot be '
-                  'detected, so they are always shown. Menu names differ between phone models and '
-                  'versions. These settings help, but Android or your phone maker may still stop '
-                  'apps in the background, so a stable connection is not guaranteed.',
-                  style: TextStyle(fontSize: 12),
+                Text(
+                  context.l10n.text('batteryGuideNote'),
+                  style: const TextStyle(fontSize: 12),
                 ),
               ],
             ),

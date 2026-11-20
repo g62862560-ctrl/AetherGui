@@ -1,9 +1,10 @@
 package com.aether.aether_gui
 
+import android.content.BroadcastReceiver
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
+import android.content.IntentFilter
 import android.net.Uri
 import android.net.VpnService
 import android.os.Build
@@ -15,23 +16,29 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
     private var pending: Pair<Int, MethodChannel.Result>? = null
+    private var channel: MethodChannel? = null
+    private var receiverRegistered = false
+    private val vpnReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                AetherVpn.VPN_STATE_CHANGED -> channel?.invokeMethod("vpnState", hashMapOf(
+                    "state" to intent.getStringExtra(AetherVpn.EXTRA_STATE),
+                    "owned" to intent.getBooleanExtra(AetherVpn.EXTRA_OWNED, false),
+                    "error" to intent.getStringExtra(AetherVpn.EXTRA_ERROR),
+                    "reason" to intent.getStringExtra(AetherVpn.EXTRA_REASON),
+                ))
+            }
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "aether").setMethodCallHandler { call, result ->
-            when (call.method) {
+        channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "aether").also { methodChannel ->
+            methodChannel.setMethodCallHandler { call, result ->
+                when (call.method) {
                 "dirs" -> result.success(listOf(applicationInfo.nativeLibraryDir, filesDir.path))
                 "appVersion" -> result.success(packageManager.getPackageInfo(packageName, 0).versionName)
-                "vpnActive" -> {
-                    try {
-                        val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
-                        val network = cm.activeNetwork
-                        val caps = network?.let { cm.getNetworkCapabilities(it) }
-                        result.success(caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true)
-                    } catch (e: Exception) {
-                        result.success(false)
-                    }
-                }
+                "vpnActive" -> result.success(AetherVpn.isTunnelOwned())
                 "vpnSettings" -> {
                     startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
                     result.success(null)
@@ -57,17 +64,36 @@ class MainActivity : FlutterActivity() {
                         startActivityForResult(consent, VPN_CONSENT)
                     }
                 }
-                "keepAlive" -> {
-                    startService(Intent(this, AetherVpn::class.java).setAction(AetherVpn.KEEP_ALIVE))
-                    result.success(null)
-                }
-                "vpnStop" -> {
-                    startService(Intent(this, AetherVpn::class.java).setAction(AetherVpn.STOP))
-                    result.success(null)
-                }
+                "keepAlive" -> result.success(dispatchService(Intent(this, AetherVpn::class.java)
+                    .setAction(AetherVpn.KEEP_ALIVE)))
+                "vpnStop" -> result.success(dispatchService(Intent(this, AetherVpn::class.java)
+                    .setAction(AetherVpn.STOP)))
                 else -> result.notImplemented()
             }
+            }
         }
+        if (!receiverRegistered) {
+            val filter = IntentFilter(AetherVpn.VPN_STATE_CHANGED)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(vpnReceiver, filter, RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                registerReceiver(vpnReceiver, filter)
+            }
+            receiverRegistered = true
+        }
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        if (receiverRegistered) {
+            unregisterReceiver(vpnReceiver)
+            receiverRegistered = false
+        }
+        pending?.second?.success(false)
+        pending = null
+        channel?.setMethodCallHandler(null)
+        channel = null
+        super.cleanUpFlutterEngine(flutterEngine)
     }
 
     // Opens a system screen; false when this device has no such screen (the caller falls back).
@@ -92,9 +118,14 @@ class MainActivity : FlutterActivity() {
         return false
     }
 
-    private fun startVpn(port: Int): Boolean {
-        startService(Intent(this, AetherVpn::class.java).putExtra("port", port))
-        return true
+    private fun startVpn(port: Int): Boolean = dispatchService(
+        Intent(this, AetherVpn::class.java).putExtra(AetherVpn.EXTRA_PORT, port),
+    )
+
+    private fun dispatchService(intent: Intent): Boolean = try {
+        startService(intent) != null
+    } catch (_: Exception) {
+        false
     }
 
     @Deprecated("Deprecated in Java")

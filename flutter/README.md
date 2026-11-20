@@ -2,14 +2,21 @@
 
 Flutter Android client for [Aether](https://github.com/CluvexStudio/Aether): connects through aether and routes the whole device through it as a VPN.
 
-Build: run `fetch_aether.sh` (downloads aether, builds hev-socks5-tunnel with the NDK), then `flutter build apk`.
+Build: run `fetch_aether.sh` (downloads the pinned Aether release and builds hev-socks5-tunnel with the NDK), then `build-debug.bat` for the existing arm64-only debug APK. `build-release-arm64.bat` is the checked ARM64 release convenience: it restores the lockfile, analyzes, tests, builds, and reports the APK's ABI, SHA-256 and signing certificate when Android `apksigner` is available. The release workflow continues to produce split arm64-v8a, armeabi-v7a and x86_64 APKs.
 
-## Core v2.3.0 update
+`fetch_aether.sh` is reproducible: Aether is pinned to **v2.4.0**, each Android archive is checked against a checksum committed in the script, and hev-socks5-tunnel is pinned to **2.17.1**. Do not replace the version with a `latest` URL; update the version and all checksums together after reviewing upstream notes. It also emits native dependency metadata beside the fetched libraries.
 
-The Android binaries were refreshed from the official v2.3.0 release for
-arm64-v8a, armeabi-v7a and x86_64, with archive SHA-256 verification. Aether,
-Lyrebird and Psiphon were updated together; the existing hev-socks5-tunnel
-build is unchanged.
+## Verification and dependency inventory
+
+Run `flutter pub get --enforce-lockfile`, `flutter analyze`, and `flutter test` before building. `tool/report-apk.ps1 -ApkPath <apk>` reports the packaged ABIs and SHA-256, then verifies and prints signer certificates when `apksigner` is installed under `ANDROID_HOME` or `ANDROID_SDK_ROOT`. `tool/generate-sbom.ps1` produces a CycloneDX 1.5 JSON inventory from the checked-in Pub lockfile and pinned native versions without adding another dependency. CI uploads both reports; release artifacts include them.
+
+The committed `pubspec.lock` is the authoritative Dart dependency/version and hosted-package checksum record. Flutter's generated `NOTICES.Z` in the APK is the runtime license/About metadata provided by the existing toolchain. Native license notices remain upstream inside the pinned Aether archives; they should be reviewed whenever the pin changes.
+
+## Core v2.4.0 update
+
+The Android binaries come from the official v2.4.0 release for arm64-v8a,
+armeabi-v7a and x86_64. Aether, Lyrebird and Psiphon are updated together;
+the hev-socks5-tunnel pin is unchanged.
 
 In v2.3, `--gool` means WireGuard inside MASQUE. Existing WARP-in-WARP
 presets now use `--gool-classic`, preserving their saved indexes and behavior.

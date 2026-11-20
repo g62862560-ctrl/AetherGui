@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import 'aether.dart';
 import 'core_options.dart';
+import 'localization.dart';
 
 class CoreSettingsPage extends StatefulWidget {
   final CoreOptions options;
@@ -24,7 +25,7 @@ class _CoreSettingsPageState extends State<CoreSettingsPage> {
     text: '${widget.options.startupSeconds}',
   );
   String? _error;
-  String _help = 'Loading bundled core help...';
+  String? _help;
   bool _saving = false;
 
   @override
@@ -48,7 +49,7 @@ class _CoreSettingsPageState extends State<CoreSettingsPage> {
       ]).timeout(const Duration(seconds: 10));
       if (mounted) setState(() => _help = output.join('\n'));
     } catch (_) {
-      if (mounted) setState(() => _help = 'Could not read bundled core help.');
+      if (mounted) setState(() => _help = '');
     } finally {
       process?.kill();
     }
@@ -72,7 +73,7 @@ class _CoreSettingsPageState extends State<CoreSettingsPage> {
         setState(
           () => _error = e is FormatException
               ? e.message
-              : 'Could not save settings.',
+              : context.l10n.text('saveSettingsFailed'),
         );
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -90,11 +91,11 @@ class _CoreSettingsPageState extends State<CoreSettingsPage> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
-      title: const Text('Core settings'),
+      title: Text(context.l10n.text('coreSettings')),
       actions: [
         TextButton(
           onPressed: _saving ? null : _save,
-          child: const Text('Save'),
+          child: Text(context.l10n.text('save')),
         ),
       ],
     ),
@@ -105,17 +106,11 @@ class _CoreSettingsPageState extends State<CoreSettingsPage> {
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              const Text(
-                'Expert options apply to every selected protocol. Choose a manual protocol for protocol-specific options. Flags override environment variables. Unsupported combinations are reported by the core.',
-              ),
+              Text(context.l10n.text('coreExpertIntro')),
               const SizedBox(height: 12),
-              const Text(
-                'Protocol, proxy ports and bundled helper paths are app-managed. SO_MARK needs root; external helper executables must be packaged for Android. File paths must be accessible to the app.',
-              ),
+              Text(context.l10n.text('coreManagedIntro')),
               const SizedBox(height: 12),
-              const Text(
-                'Settings are saved in app-private storage, not encrypted. Avoid saving tokens on shared devices. Direct routes bypass the tunnel; Gateway may log browsing. Debug/trace logs may contain sensitive data.',
-              ),
+              Text(context.l10n.text('coreSensitiveWarning')),
               const SizedBox(height: 16),
               TextField(
                 controller: _arguments,
@@ -123,9 +118,9 @@ class _CoreSettingsPageState extends State<CoreSettingsPage> {
                 maxLines: 12,
                 autocorrect: false,
                 enableSuggestions: false,
-                decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
-                  labelText: 'Additional arguments (JSON array)',
+                decoration: InputDecoration(
+                  border: const OutlineInputBorder(),
+                  labelText: context.l10n.text('additionalArguments'),
                   helperText:
                       'Example: ["--scan", "balanced", "--noize", "gfw", "--stats"]',
                   helperMaxLines: 3,
@@ -138,9 +133,9 @@ class _CoreSettingsPageState extends State<CoreSettingsPage> {
                 maxLines: 10,
                 autocorrect: false,
                 enableSuggestions: false,
-                decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
-                  labelText: 'Environment (JSON object)',
+                decoration: InputDecoration(
+                  border: const OutlineInputBorder(),
+                  labelText: context.l10n.text('environmentJson'),
                   helperText: 'Example: {"AETHER_ROUTE_SNIFF_MS": "600"}',
                   helperMaxLines: 3,
                 ),
@@ -149,11 +144,10 @@ class _CoreSettingsPageState extends State<CoreSettingsPage> {
               TextField(
                 controller: _timeout,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
-                  labelText: 'Advanced startup timeout (seconds)',
-                  helperText:
-                      '30–3600; used when a country or extra arguments/environment are configured.',
+                decoration: InputDecoration(
+                  border: const OutlineInputBorder(),
+                  labelText: context.l10n.text('startupTimeout'),
+                  helperText: context.l10n.text('startupTimeoutHelp'),
                   helperMaxLines: 3,
                 ),
               ),
@@ -171,10 +165,10 @@ class _CoreSettingsPageState extends State<CoreSettingsPage> {
                         _environment.text = '{}';
                         _timeout.text = '300';
                       },
-                child: const Text('Reset fields to defaults'),
+                child: Text(context.l10n.text('resetFields')),
               ),
-              const ExpansionTile(
-                title: Text('Feature examples'),
+              ExpansionTile(
+                title: Text(context.l10n.text('featureExamples')),
                 children: [
                   Padding(
                     padding: EdgeInsets.all(16),
@@ -194,11 +188,17 @@ class _CoreSettingsPageState extends State<CoreSettingsPage> {
                 ],
               ),
               ExpansionTile(
-                title: const Text('Bundled core: full help'),
+                title: Text(context.l10n.text('bundledCoreHelp')),
                 children: [
                   Padding(
                     padding: const EdgeInsets.all(16),
-                    child: SelectableText(_help),
+                    child: SelectableText(
+                      _help == null
+                          ? context.l10n.text('loadingCoreHelp')
+                          : _help!.isEmpty
+                          ? context.l10n.text('coreHelpFailed')
+                          : _help!,
+                    ),
                   ),
                 ],
               ),

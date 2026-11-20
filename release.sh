@@ -23,19 +23,23 @@ sed -i -E "s/(AetherGui-|v)[0-9]+\.[0-9]+\.[0-9]+([-<\/])/\1$v\2/g" docs/index.h
 dotnet run --project tests/CoreChecks.csproj
 ./fetch_tun2socks.sh
 dotnet publish AetherGui.csproj -c Release -o publish
-(cd flutter && flutter test && flutter build apk --release --split-per-abi)
+(cd flutter && flutter pub get --enforce-lockfile && flutter analyze && flutter test && flutter build apk --release --split-per-abi)
 
 # Only what the app needs: never identity files (*.toml hold private keys) or anything else left in publish/.
 out=release-out; rm -rf "$out"; mkdir -p "$out/AetherGui"
 cp -r publish/AetherGui.exe publish/aether.exe publish/pt publish/tun2socks publish/LICENSES "$out/AetherGui/"
 (cd "$out" && python -I -m zipfile -c "AetherGui-$v-windows-x64.zip" AetherGui)
+mkdir -p "$out/reports"
 for f in flutter/build/app/outputs/flutter-apk/app-*-release.apk; do # one APK per CPU: arm64-v8a, armeabi-v7a, x86_64
-  a=${f##*/app-}; cp "$f" "$out/AetherGui-$v-android-${a%-release.apk}.apk"
+  a=${f##*/app-}; apk="$out/AetherGui-$v-android-${a%-release.apk}.apk"; cp "$f" "$apk"
+  powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File flutter/tool/report-apk.ps1 -ApkPath "$apk" | tee -a "$out/reports/apk-report.txt"
 done
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File flutter/tool/generate-sbom.ps1 -OutputPath "$out/reports/sbom.cdx.json"
 
 git add AetherGui.csproj flutter/pubspec.yaml docs/index.html
 git commit -m "Release v$v"
 git tag "v$v"
 git push origin HEAD "v$v"
-"$gh" release create "v$v" "$out/AetherGui-$v-windows-x64.zip" "$out"/AetherGui-$v-android-*.apk --title "v$v" --generate-notes
+(cd "$out" && sha256sum AetherGui-* reports/apk-report.txt reports/sbom.cdx.json > SHA256SUMS.txt)
+"$gh" release create "v$v" "$out/AetherGui-$v-windows-x64.zip" "$out"/AetherGui-$v-android-*.apk "$out/reports/apk-report.txt" "$out/reports/sbom.cdx.json" "$out/SHA256SUMS.txt" --title "v$v" --generate-notes
 echo "Released v$v"

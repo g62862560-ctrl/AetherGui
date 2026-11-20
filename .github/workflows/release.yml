@@ -74,11 +74,13 @@ jobs:
         run: |
           sed -i "s/^version: [0-9.]*+[0-9]*/version: $VERSION+${{ needs.prepare.outputs.build }}/" pubspec.yaml
 
-      - run: flutter pub get
+      - run: flutter pub get --enforce-lockfile
+
+      - run: flutter analyze
 
       - run: flutter test
 
-      - name: Fetch aether and build hev-socks5-tunnel
+      - name: Fetch pinned aether and build hev-socks5-tunnel
         run: bash fetch_aether.sh
 
       - name: Set up release signing
@@ -98,15 +100,25 @@ jobs:
 
       - run: flutter build apk --release --split-per-abi
 
-      - run: |
+      - name: Verify, report and name APKs
+        run: |
+          mkdir -p reports
           for f in build/app/outputs/flutter-apk/app-*-release.apk; do
-            a=${f##*/app-}; mv "$f" "AetherGui-$VERSION-android-${a%-release.apk}.apk"
+            a=${f##*/app-}; out="AetherGui-$VERSION-android-${a%-release.apk}.apk"
+            mv "$f" "$out"
+            pwsh -File tool/report-apk.ps1 -ApkPath "$out" | tee -a reports/apk-report.txt
           done
+      - name: Generate dependency SBOM
+        shell: pwsh
+        run: ./tool/generate-sbom.ps1 -OutputPath reports/sbom.cdx.json
 
       - uses: actions/upload-artifact@v4
         with:
           name: android
-          path: flutter/AetherGui-${{ inputs.version }}-android-*.apk
+          path: |
+            flutter/AetherGui-${{ inputs.version }}-android-*.apk
+            flutter/reports/apk-report.txt
+            flutter/reports/sbom.cdx.json
           if-no-files-found: error
 
   windows:
@@ -129,10 +141,10 @@ jobs:
 
       - name: Fetch aether
         run: |
-          base=https://github.com/CluvexStudio/Aether/releases/latest/download
+          base=https://github.com/CluvexStudio/Aether/releases/download/v2.4.0
           f=aether-windows-x86_64.zip
-          curl -fsSL -o "$f" "$base/$f"
-          curl -fsSL "$base/$f.sha256" | awk -v f="$f" '{print $1"  "f}' | sha256sum -c --quiet
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "$f" "$base/$f"
+          printf '%s  %s\n' '21b1444628d37121e873878e2eddd7932215418af1a2a12470caee5809026f1a' "$f" | sha256sum -c --quiet
           unzip -q "$f" -d core
           cp core/aether.exe .
           cp -r core/pt .
@@ -184,3 +196,5 @@ jobs:
           git tag "v$VERSION"
           git push origin HEAD "v$VERSION"
           gh release create "v$VERSION" assets/* --title "v$VERSION" --generate-notes
+          sha256sum assets/* > SHA256SUMS.txt
+          gh release upload "v$VERSION" SHA256SUMS.txt

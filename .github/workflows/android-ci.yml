@@ -1,0 +1,58 @@
+name: Android CI
+
+on:
+  push:
+    paths:
+      - 'flutter/**'
+      - '.github/workflows/android-ci.yml'
+  pull_request:
+    paths:
+      - 'flutter/**'
+      - '.github/workflows/android-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: flutter
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Restore locked Dart dependencies
+        run: flutter pub get --enforce-lockfile
+      - run: flutter analyze
+      - run: flutter test
+      - name: Fetch pinned native dependencies
+        run: bash fetch_aether.sh
+      - name: Build ARM64 debug APK
+        run: flutter build apk --debug --target-platform android-arm64
+      - name: Generate dependency SBOM
+        shell: pwsh
+        run: ./tool/generate-sbom.ps1
+      - name: Report APK ABI and hash
+        shell: pwsh
+        run: ./tool/report-apk.ps1 -ApkPath build/app/outputs/flutter-apk/app-debug.apk | Tee-Object build/reports/apk-report.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-ci-reports
+          path: |
+            flutter/build/reports/apk-report.txt
+            flutter/build/reports/sbom.cdx.json
+          if-no-files-found: error

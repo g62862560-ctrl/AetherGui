@@ -28,7 +28,17 @@ android {
     }
 
     // aether ships as libaether.so; extracted to nativeLibraryDir so it can be exec'd.
-    packaging { jniLibs { useLegacyPackaging = true; keepDebugSymbols += listOf("**/libaether.so", "**/liblyrebird.so", "**/libpsiphon.so") } }
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+            keepDebugSymbols += listOf("**/libaether.so", "**/liblyrebird.so", "**/libpsiphon.so")
+            // Flutter's target-platform filters its engine but not manually supplied jniLibs.
+            // Exclude those extra helpers only for debug; release still emits all split ABIs.
+            if (gradle.startParameter.taskNames.any { it.contains("Debug", ignoreCase = true) }) {
+                excludes += listOf("**/armeabi-v7a/*.so", "**/x86_64/*.so")
+            }
+        }
+    }
 
     // Release key from android/key.properties (gitignored); without it release falls back to the debug key.
     val keyProps = rootProject.file("key.properties").takeIf { it.exists() }

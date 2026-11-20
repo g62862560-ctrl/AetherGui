@@ -7,7 +7,9 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
+import android.util.Log
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 // Full-device VPN: every app's IPv4 and IPv6 traffic enters the tun, hev-socks5-tunnel (tun2socks, built from
 // src/main/jni) turns it into connections on aether's SOCKS5 port. DNS is answered inside the tun by
@@ -17,73 +19,130 @@ class AetherVpn : VpnService() {
     private var tun: ParcelFileDescriptor? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        stop()
-        if (intent?.action == STOP) {
-            stopSelf()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            STOP, DISCONNECT -> {
+                stop("disconnected", reason = "requested")
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            KEEP_ALIVE -> {
+                stop("disconnected")
+                startForeground(NOTIFICATION_ID, notification(false))
+                return START_NOT_STICKY
+            }
         }
-        // Foreground keeps the whole process (aether child + Dart monitor) alive when the app is backgrounded or the screen locks.
-        getSystemService(NotificationManager::class.java)
-            .createNotificationChannel(NotificationChannel("vpn", "VPN", NotificationManager.IMPORTANCE_LOW))
-        startForeground(
-            1,
-            Notification.Builder(this, "vpn")
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
-                .setContentTitle("Aether is running")
-                .setContentIntent(PendingIntent.getActivity(this, 0,
-                    Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE))
-                .setOngoing(true)
-                .build(),
-        )
-        if (intent?.action == KEEP_ALIVE) return START_NOT_STICKY // proxy mode: no tun, just stay alive
-        val port = intent?.getIntExtra("port", 1818) ?: 1818
-        val t = Builder()
-            .setSession("Aether VPN")
-            .setMtu(MTU)
-            .addAddress("198.18.0.1", 32)
-            .addRoute("0.0.0.0", 0)
-            // IPv6 must enter the tun too, or it bypasses the VPN on IPv6 networks.
-            .addAddress("fc00::1", 128)
-            .addRoute("::", 0)
-            .addDnsServer(DNS)
-            .addDisallowedApplication(packageName) // aether itself must reach the internet directly
-            .establish() ?: return START_NOT_STICKY // consent revoked meanwhile
-        tun = t
-        val conf = File(cacheDir, "tun.yml")
-        conf.writeText(
-            """
-            tunnel:
-              mtu: $MTU
-              ipv4: 198.18.0.1
-              ipv6: 'fc00::1'
-            socks5:
-              address: 127.0.0.1
-              port: $port
-              udp: 'udp'
-            mapdns:
-              address: $DNS
-              port: 53
-              network: 100.64.0.0
-              netmask: 255.192.0.0
-              cache-size: 10000 # required: 0/absent silently disables mapdns
-            misc:
-              log-level: warn
-            """.trimIndent()
-        )
-        TProxyStartService(conf.path, t.fd)
+
+        stop(null)
+        publishState("starting", owned = false)
+        startForeground(NOTIFICATION_ID, notification(true))
+        val port = intent?.getIntExtra(EXTRA_PORT, DEFAULT_PORT) ?: DEFAULT_PORT
+        try {
+            val t = Builder()
+                .setSession("Aether VPN")
+                .setMtu(MTU)
+                .addAddress("198.18.0.1", 32)
+                .addRoute("0.0.0.0", 0)
+                .addAddress("fc00::1", 128)
+                .addRoute("::", 0)
+                .addDnsServer(DNS)
+                .addDisallowedApplication(packageName)
+                .establish() ?: return failStart("VPN permission was revoked before the tunnel was established")
+            tun = t
+            val conf = File(cacheDir, "tun.yml")
+            conf.writeText(
+                """
+                tunnel:
+                  mtu: $MTU
+                  ipv4: 198.18.0.1
+                  ipv6: 'fc00::1'
+                socks5:
+                  address: 127.0.0.1
+                  port: $port
+                  udp: 'udp'
+                mapdns:
+                  address: $DNS
+                  port: 53
+                  network: 100.64.0.0
+                  netmask: 255.192.0.0
+                  cache-size: 10000
+                misc:
+                  log-level: warn
+                """.trimIndent()
+            )
+            if (!TProxyStartService(conf.path, t.fd)) {
+                return failStart("tun2socks failed to start")
+            }
+            tunnelOwned.set(true)
+            publishState("connected", owned = true)
+        } catch (e: Exception) {
+            return failStart(e.message ?: e.javaClass.simpleName)
+        }
         return START_NOT_STICKY
     }
 
+    private fun notification(showDisconnect: Boolean): Notification {
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(NotificationChannel(CHANNEL_ID, "VPN", NotificationManager.IMPORTANCE_LOW))
+        val builder = Notification.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle("Aether is running")
+            .setContentIntent(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+            .setOngoing(true)
+        if (showDisconnect) {
+            val stopIntent = Intent(this, AetherVpn::class.java).setAction(DISCONNECT)
+            builder.addAction(Notification.Action.Builder(null, "Disconnect", PendingIntent.getService(
+                this, 1, stopIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build())
+        }
+        return builder.build()
+    }
+
+    private fun failStart(message: String): Int {
+        Log.e(TAG, message)
+        stop(null)
+        publishState("error", owned = false, error = message)
+        stopSelf()
+        return START_NOT_STICKY
+    }
+
+    override fun onRevoke() {
+        stop(null)
+        publishState("disconnected", owned = false, reason = "revoked")
+        stopSelf()
+        super.onRevoke()
+    }
+
     override fun onDestroy() {
-        stop() // also reached via onRevoke (another VPN took over), whose default calls stopSelf
+        val wasOwned = tunnelOwned.get()
+        stop(null)
+        if (wasOwned) publishState("disconnected", owned = false)
         super.onDestroy()
     }
 
-    private fun stop() {
-        if (tun == null) return
-        TProxyStopService()
-        tun?.close()
+    private fun stop(finalState: String?, reason: String? = null) {
+        val descriptor = tun
+        val wasRunning = descriptor != null || tunnelOwned.get()
+        if (wasRunning) publishState("stopping", owned = tunnelOwned.get())
+        if (descriptor != null) {
+            try {
+                if (!TProxyStopService()) Log.w(TAG, "tun2socks reported stop failure")
+            } catch (e: Exception) {
+                Log.w(TAG, "tun2socks stop failed", e)
+            }
+            try { descriptor.close() } catch (e: Exception) { Log.w(TAG, "tun close failed", e) }
+        }
         tun = null
+        tunnelOwned.set(false)
+        if (finalState != null) publishState(finalState, owned = false, reason = reason)
+    }
+
+    private fun publishState(state: String, owned: Boolean, error: String? = null, reason: String? = null) {
+        val intent = Intent(VPN_STATE_CHANGED).setPackage(packageName)
+            .putExtra(EXTRA_STATE, state)
+            .putExtra(EXTRA_OWNED, owned)
+        error?.let { intent.putExtra(EXTRA_ERROR, it) }
+        reason?.let { intent.putExtra(EXTRA_REASON, it) }
+        sendBroadcast(intent)
     }
 
     // Must match hev-jni.c exactly: JNI_OnLoad registers all four, one mismatch aborts the app.
@@ -94,9 +153,23 @@ class AetherVpn : VpnService() {
 
     companion object {
         const val STOP = "stop"
+        const val DISCONNECT = "com.aether.aether_gui.DISCONNECT"
         const val KEEP_ALIVE = "keepAlive"
+        const val VPN_STATE_CHANGED = "com.aether.aether_gui.VPN_STATE_CHANGED"
+        const val EXTRA_STATE = "state"
+        const val EXTRA_OWNED = "owned"
+        const val EXTRA_ERROR = "error"
+        const val EXTRA_REASON = "reason"
+        const val EXTRA_PORT = "port"
         const val MTU = 8500
         const val DNS = "198.18.0.2"
+        private const val DEFAULT_PORT = 1818
+        private const val CHANNEL_ID = "vpn"
+        private const val NOTIFICATION_ID = 1
+        private const val TAG = "AetherVpn"
+        private val tunnelOwned = AtomicBoolean(false)
+
+        fun isTunnelOwned(): Boolean = tunnelOwned.get()
 
         init {
             System.loadLibrary("hev-socks5-tunnel")

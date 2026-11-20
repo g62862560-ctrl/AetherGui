@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'aether.dart';
+import 'localization.dart';
 
 typedef ProtocolOrderResult = ({List<int> order, int selected});
 
@@ -39,19 +40,25 @@ class _ProtocolOrderSheetState extends State<ProtocolOrderSheet> {
             padding: const EdgeInsets.fromLTRB(20, 12, 8, 8),
             child: Row(
               children: [
-                const Expanded(
+                Expanded(
                   child: Text(
-                    'Protocol order',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                    context.l10n.text('protocolOrder'),
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
-                TextButton(onPressed: _done, child: const Text('Done')),
+                TextButton(
+                  onPressed: _done,
+                  child: Text(context.l10n.text('done')),
+                ),
               ],
             ),
           ),
           CheckboxListTile(
             controlAffinity: ListTileControlAffinity.leading,
-            title: const Text('Auto (order in Settings)'),
+            title: Text(context.l10n.text('autoOrderInSettings')),
             value: _selected == -1,
             onChanged: (_) => setState(() => _selected = -1),
           ),

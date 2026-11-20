@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 
+import 'connection.dart';
 import 'core_options.dart';
 import 'exit_info.dart';
 
@@ -66,9 +67,39 @@ class Cancel {
 // aether, running as a child process of the app (Android kills it together with the app).
 class AetherProcess {
   final Process p;
+  final File? pidFile;
   bool exited = false;
-  AetherProcess(this.p) {
-    p.exitCode.then((_) => exited = true);
+  Future<int>? _exit;
+  AetherProcess(this.p, [this.pidFile]) {
+    _exit = p.exitCode;
+    _exit!.then((_) {
+      exited = true;
+      _deleteOwnedPidFile();
+    });
+  }
+
+  void _deleteOwnedPidFile() {
+    final file = pidFile;
+    if (file == null) return;
+    try {
+      if (file.existsSync() && file.readAsStringSync().trim() == '${p.pid}') {
+        file.deleteSync();
+      }
+    } catch (_) {}
+  }
+
+  Future<void> stop({Duration timeout = const Duration(seconds: 2)}) async {
+    if (exited) return;
+    p.stdin.close();
+    p.kill(ProcessSignal.sigterm);
+    try {
+      await _exit!.timeout(timeout);
+    } on TimeoutException {
+      p.kill(ProcessSignal.sigkill);
+      try {
+        await _exit!.timeout(timeout);
+      } catch (_) {}
+    }
   }
 }
 
@@ -231,6 +262,27 @@ class Aether {
   dir; // app files dir: aether's working dir, holds its identity .toml files
 
   static const _ch = MethodChannel('aether');
+  static FutureOr<void> Function()? _onVpnRevoked;
+  static FutureOr<void> Function(NativeVpnState)? _onVpnState;
+
+  static void setVpnHandlers({
+    FutureOr<void> Function()? onRevoked,
+    FutureOr<void> Function(NativeVpnState)? onState,
+  }) {
+    _onVpnRevoked = onRevoked;
+    _onVpnState = onState;
+    _ch.setMethodCallHandler((call) async {
+      if (call.method == 'vpnRevoked') {
+        await _onVpnRevoked?.call();
+      } else if (call.method == 'vpnState') {
+        final state = NativeVpnState.from(call.arguments);
+        if (state != null) await _onVpnState?.call(state);
+      }
+    });
+  }
+
+  static void setVpnRevokedHandler(FutureOr<void> Function()? handler) =>
+      setVpnHandlers(onRevoked: handler);
 
   static Future<void> init() async {
     final dirs = await _ch.invokeListMethod<String>('dirs');
@@ -243,9 +295,11 @@ class Aether {
   // Full-device VPN (tun2socks onto the SOCKS port); false if the user declined the VPN prompt.
   static Future<bool> vpnStart() async =>
       await _ch.invokeMethod<bool>('vpnStart', socksPort) ?? false;
-  static Future<void> vpnStop() => _ch.invokeMethod('vpnStop');
+  static Future<bool> vpnStop() async =>
+      await _ch.invokeMethod<bool>('vpnStop') ?? false;
   // Proxy mode: the same service without a tun, only so Android keeps the app alive in the background.
-  static Future<void> keepAlive() => _ch.invokeMethod('keepAlive');
+  static Future<bool> keepAlive() async =>
+      await _ch.invokeMethod<bool>('keepAlive') ?? false;
 
   static const guiRepo = 'g62862560-ctrl/AetherGui';
   static Future<String?> appVersion() => _ch.invokeMethod<String>('appVersion');
@@ -476,16 +530,23 @@ class Aether {
   // so the previous core lives on holding the ports ("port in use" with no other app involved). True if one was killed.
   // shortcut: kills only aether itself, not the tor/psiphon helpers it spawned; they exit when their parent link closes.
   static bool killStale() {
+    final pidFile = File('$dir/core.pid');
     try {
-      final pid = int.parse(File('$dir/core.pid').readAsStringSync().trim());
+      final pid = int.parse(pidFile.readAsStringSync().trim());
       // The pid may have been reused by another process since: only kill what really is our core.
       if (!File(
         '/proc/$pid/cmdline',
       ).readAsStringSync().contains('libaether')) {
+        pidFile.deleteSync();
         return false;
       }
-      return Process.killPid(pid, ProcessSignal.sigkill);
+      final killed = Process.killPid(pid, ProcessSignal.sigkill);
+      if (pidFile.existsSync()) pidFile.deleteSync();
+      return killed;
     } catch (_) {
+      try {
+        if (pidFile.existsSync()) pidFile.deleteSync();
+      } catch (_) {}
       return false;
     }
   }
@@ -576,8 +637,8 @@ class Aether {
           }
         }, onError: (_) => log('Core output stream failed.'));
       }
-      File('$dir/core.pid').writeAsStringSync('${proc.pid}');
-      return AetherProcess(proc);
+      final pidFile = File('$dir/core.pid')..writeAsStringSync('${proc.pid}');
+      return AetherProcess(proc, pidFile);
     } catch (_) {
       // ProcessException can include arguments containing access tokens.
       log('Core start failed. Check bundled binaries and core settings.');
