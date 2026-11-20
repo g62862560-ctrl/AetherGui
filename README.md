@@ -20,6 +20,10 @@
   </tr>
 </table>
 
+## Release process
+
+All releases must be created with `./release.sh X.Y.Z`. On Windows, run `release.bat X.Y.Z`, which delegates to the same script. Do not publish releases manually; the script is responsible for tests, Windows and Android builds, reports, version commits, tags, pushes, and GitHub release assets.
+
 ## Credits
 
 - **[g62862560-ctrl](https://github.com/g62862560-ctrl)**
