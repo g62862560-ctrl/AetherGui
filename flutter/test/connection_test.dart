@@ -6,6 +6,8 @@ import 'package:aether_gui/connection.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+class _RealHttpOverrides extends HttpOverrides {}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -64,6 +66,44 @@ void main() {
             throw PlatformException(code: 'vpn_stop', message: 'stale'),
       );
       expect(await Aether.vpnStop(), isFalse);
+    },
+  );
+
+  test(
+    'cancelled probe closes its socket and a new session can probe',
+    () async {
+      final previousOverrides = HttpOverrides.current;
+      HttpOverrides.global = _RealHttpOverrides();
+      addTearDown(() => HttpOverrides.global = previousOverrides);
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final oldPort = Aether.httpPort;
+      Aether.httpPort = server.port;
+      addTearDown(() async {
+        Aether.httpPort = oldPort;
+        await server.close(force: true);
+      });
+      final received = Completer<HttpRequest>();
+      final subscription = server.listen((request) {
+        if (!received.isCompleted) {
+          received.complete(
+            request,
+          ); // Simulate a proxy stalled by network loss.
+        } else {
+          request.response.statusCode = 204;
+          request.response.close();
+        }
+      });
+      addTearDown(subscription.cancel);
+      final ct = Cancel();
+      final probe = Aether.ping(ct);
+      final expectation = expectLater(probe, throwsA(isA<Cancelled>()));
+      final request = await received.future;
+      final socket = await request.response.detachSocket(writeHeaders: false);
+      final closed = socket.drain<void>();
+      ct.cancel();
+      await expectation;
+      await closed.timeout(const Duration(seconds: 2));
+      expect(await Aether.ping(Cancel()), isNotNull);
     },
   );
 

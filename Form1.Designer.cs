@@ -157,8 +157,11 @@ partial class Form1
             new ToolStripMenuItem("&Tools", null, btnCoreSettings, btnCoreInput, btnInfo),
             new ToolStripMenuItem("&Help", null, btnUpdates)]);
 
-        var status = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = true, Margin = Padding.Empty };
-        status.Controls.Add(lblStatus);
+        var status = new TableLayoutPanel { AutoSize = true, Dock = DockStyle.Top, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
+        status.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        status.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        lblStatus.Anchor = AnchorStyles.Left;
+        status.Controls.Add(lblStatus, 0, 0);
 
         var tryRow = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = true, Margin = Padding.Empty };
         tryRow.Controls.Add(new Label { Text = "Auto try (seconds)", AutoSize = true, Margin = new Padding(0, 5, 4, 0) });
@@ -172,8 +175,8 @@ partial class Form1
         statAvg = StatCard(statCards, "Avg time", 2);
         statTries = StatCard(statCards, "Tries", 3);
 
-        // Exit location: a flag image beside "Country · IP · latency · WARP", shown only while connected.
-        exitPanel = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = false, Margin = new Padding(3, 0, 3, 6), Visible = false, AccessibleName = "Exit location" };
+        // Exit location: only the country flag, shown while connected. Never show the exit IP.
+        exitPanel = new FlowLayoutPanel { Anchor = AnchorStyles.Right, AutoSize = true, WrapContents = false, Margin = new Padding(8, 0, 0, 0), Visible = false, AccessibleName = "Exit location" };
         exitFlag = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom, Size = new Size(22, 16), Margin = new Padding(0, 2, 4, 0) };
         exitText = new Label { AutoSize = true, Text = "-", Margin = Padding.Empty, AccessibleName = "Exit location text" };
         exitPanel.Controls.Add(exitFlag);
@@ -187,7 +190,7 @@ partial class Form1
         controlLayout.Controls.Add(prgConnecting, 0, 1);
         controlLayout.Controls.Add(actionRow, 0, 2);
         controlLayout.Controls.Add(statCards, 0, 3);
-        controlLayout.Controls.Add(exitPanel, 0, 4);
+        status.Controls.Add(exitPanel, 1, 0);
         controlLayout.Controls.Add(tryRow, 0, 5);
         controlLayout.Controls.Add(lblProtocol, 0, 6);
         controlLayout.Controls.Add(cboProtocol, 0, 7);

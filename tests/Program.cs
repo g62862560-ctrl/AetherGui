@@ -280,6 +280,21 @@ static class Checks
                 main.Close();
             }
         }
+        using (var exitForm = new Form1())
+        {
+            var showExit = typeof(Form1).GetMethod("ShowExit", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            showExit.Invoke(exitForm, new object[] { new ExitInfo("104.28.214.161", "DE", "FRA", 448, true) });
+            var fields = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var text = (Label)typeof(Form1).GetField("exitText", fields)!.GetValue(exitForm)!;
+            var flag = (PictureBox)typeof(Form1).GetField("exitFlag", fields)!.GetValue(exitForm)!;
+            var panel = (FlowLayoutPanel)typeof(Form1).GetField("exitPanel", fields)!.GetValue(exitForm)!;
+            Check(text.Text == "" && !text.Visible, "Exit badge contains no IP or technical text");
+            Check(panel.Parent is TableLayoutPanel header && header.GetColumn(panel) == 1
+                && header.Controls.OfType<Label>().Any(label => label.AccessibleName == "Connection status: Disconnected"),
+                "Exit flag is in the right-hand column of the connection status header");
+            Check(flag.Image is not null && flag.AccessibleName == "Exit country: Germany"
+                && panel.AccessibleName == "Exit country: Germany", "Exit badge uses flag with country-only accessibility");
+        }
         Check(Form1.LogColor("Could not start the core") == Palette.Disconnected, "Errors are red in the log");
         Check(Form1.LogColor("Switching to WireGuard") == Palette.Connecting, "Route switches are amber in the log");
         Check(Form1.LogColor("Connected: MASQUE") == Palette.Connected, "Connections are green in the log");

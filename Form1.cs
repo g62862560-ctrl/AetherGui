@@ -582,17 +582,18 @@ public partial class Form1 : Form
 
     private ExitInfo? _exitInfo;
 
-    // Shows the tunnel's exit hop: flag, country name, IP, latency and WARP marker.
+    // Home shows only the exit flag; technical exit details belong in the activity log.
     private void ShowExit(ExitInfo exit)
     {
         _exitInfo = exit;
         var flag = Aether.CountryFlag(exit.CountryCode);
         exitFlag.Image = flag;
         exitFlag.Visible = flag is not null;
-        var text = $"{Aether.CountryName(exit.CountryCode)} · {exit.Ip}";
-        if (exit.LatencyMs is int ms) text += $" · {ms} ms";
-        if (exit.Warp) text += " · WARP";
-        exitText.Text = text;
+        var accessibleName = $"Exit country: {Aether.CountryName(exit.CountryCode)}";
+        exitFlag.AccessibleName = accessibleName;
+        exitPanel.AccessibleName = accessibleName;
+        exitText.Text = "";
+        exitText.Visible = false;
         exitPanel.Visible = true;
     }
 

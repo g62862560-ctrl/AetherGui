@@ -546,11 +546,6 @@ class Aether {
     }
   }
 
-  // A real request through aether's HTTP proxy measures the real delay.
-  static final _http = HttpClient()
-    ..findProxy = ((_) => 'PROXY 127.0.0.1:$httpPort')
-    ..connectionTimeout = const Duration(seconds: 3);
-
   static final _ansi = RegExp(r'\x1B\[[0-9;]*[A-Za-z]');
   static final _errorLine = RegExp(
     r'^Error:\s*(.+)$|\bERROR\b[:\s]+(.+)$|(\bpanicked at\b.*)$',
@@ -750,9 +745,15 @@ class Aether {
   }
 
   static Future<int?> ping(Cancel ct) async {
+    ct.check();
     final sw = Stopwatch()..start();
+    // A timed-out Future does not cancel its HTTP request. Never retain probe
+    // sockets across a network outage or a replacement proxy/core session.
+    final http = HttpClient()
+      ..findProxy = ((_) => 'PROXY 127.0.0.1:$httpPort')
+      ..connectionTimeout = const Duration(seconds: 3);
     Future<int?> get() async {
-      final req = await _http.getUrl(Uri.parse(testUrl));
+      final req = await http.getUrl(Uri.parse(testUrl));
       req.persistentConnection = false;
       final res = await req.close();
       await res.drain<void>();
@@ -762,8 +763,15 @@ class Aether {
 
     int? ms;
     try {
-      ms = await get().timeout(const Duration(seconds: 3));
-    } catch (_) {}
+      ms = await Future.any<int?>([
+        get().timeout(const Duration(seconds: 3)),
+        ct._done.future.then<int?>((_) => null),
+      ]);
+    } catch (_) {
+      // A failed probe is represented by null, not a retained pending request.
+    } finally {
+      http.close(force: true);
+    }
     ct.check();
     return ms;
   }

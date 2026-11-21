@@ -18,6 +18,7 @@
     <Compile Include="..\Psiphon.cs" Link="Psiphon.cs" />
     <Compile Include="..\ProcessOwnership.cs" Link="ProcessOwnership.cs" />
     <EmbeddedResource Include="..\flutter\assets\psiphon.png" LogicalName="psiphon.png" />
+    <EmbeddedResource Include="..\flags\*.png" Link="flags\%(Filename)%(Extension)" LogicalName="AetherGui.flags.%(Filename)%(Extension)" />
     <None Include="..\aether.exe" Link="aether.exe" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
