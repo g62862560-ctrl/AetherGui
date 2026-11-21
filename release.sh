@@ -42,5 +42,6 @@ git commit -m "Release v$v"
 git tag "v$v"
 git push origin HEAD "v$v"
 (cd "$out" && sha256sum AetherGui-* reports/apk-report.txt reports/sbom.cdx.json > SHA256SUMS.txt)
-"$gh" release create "v$v" "$out/AetherGui-$v-windows-x64.zip" "$out"/AetherGui-$v-android-*.apk "$out/reports/apk-report.txt" "$out/reports/sbom.cdx.json" "$out/SHA256SUMS.txt" --title "v$v" --generate-notes
+# Keep verification reports and checksums locally; publish only installable downloads.
+"$gh" release create "v$v" "$out/AetherGui-$v-windows-x64.zip" "$out"/AetherGui-$v-android-*.apk --title "v$v" --generate-notes
 echo "Released v$v"
