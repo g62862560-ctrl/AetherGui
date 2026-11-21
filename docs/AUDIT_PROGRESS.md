@@ -1,4 +1,4 @@
-﻿# AetherGui production audit and optimization progress
+# AetherGui production audit and optimization progress
 
 Date: 2026-11-21
 
@@ -38,14 +38,14 @@ Release engineering is also hardened: release builds fail if the release keystor
 
 ## Prioritized confirmed findings
 
-### P0 â€” implemented and verified locally
+### P0 — implemented and verified locally
 
-- **Android false VPN success** â€” `MainActivity.kt`, `AetherVpn.kt`, `aether.dart`, `main.dart`. Service dispatch previously returned success before TUN/tun2socks establishment. Fixed with authoritative native acknowledgement and fail-closed Flutter behavior.
-- **Windows broad process kill** â€” `Program.cs`, `Form1.cs`. Watchdog previously killed all processes named `aether`. Fixed by exact PID plus canonical executable-path verification.
-- **Duplicate release implementation** â€” `.github/workflows/release.yml`. Hosted workflow duplicated versioning/tagging/publication and diverged from `release.sh`. Replaced with a policy guard that cannot publish.
-- **Fail-open Android release signing** â€” `build.gradle.kts`, `release.sh`, `report-apk.ps1`. Release builds previously could use the debug key and certificate reporting was optional. Release signing now requires `key.properties`, and official packaging enforces the expected certificate SHA-256.
+- **Android false VPN success** — `MainActivity.kt`, `AetherVpn.kt`, `aether.dart`, `main.dart`. Service dispatch previously returned success before TUN/tun2socks establishment. Fixed with authoritative native acknowledgement and fail-closed Flutter behavior.
+- **Windows broad process kill** — `Program.cs`, `Form1.cs`. Watchdog previously killed all processes named `aether`. Fixed by exact PID plus canonical executable-path verification.
+- **Duplicate release implementation** — `.github/workflows/release.yml`. Hosted workflow duplicated versioning/tagging/publication and diverged from `release.sh`. Replaced with a policy guard that cannot publish.
+- **Fail-open Android release signing** — `build.gradle.kts`, `release.sh`, `report-apk.ps1`. Release builds previously could use the debug key and certificate reporting was optional. Release signing now requires `key.properties`, and official packaging enforces the expected certificate SHA-256.
 
-### P1 â€” confirmed, recommended next
+### P1 — confirmed, recommended next
 
 - `SystemProxy.cs` overwrites ProxyServer/ProxyOverride rather than transactionally snapshotting and restoring the exact previous values. A persisted ownership snapshot is needed for crash recovery and to avoid clobbering user changes.
 - `TunMode.cs` cleanup can remove routes not created by the current session and uses unbounded synchronous PowerShell waits. Persist an owned-route journal and use bounded asynchronous process execution.
@@ -54,7 +54,7 @@ Release engineering is also hardened: release builds fail if the release keystor
 - Android JNI start/stop and config I/O run on the service main thread. Move them to a single serialized worker after instrumentation coverage exists.
 - Windows and Android need a dedicated singleton process manager so stale callbacks cannot affect a newer connection generation.
 
-### P2 â€” maintainability and resource efficiency
+### P2 — maintainability and resource efficiency
 
 - Track and await core output pumps and mixed-proxy client tasks rather than using unobserved fire-and-forget tasks.
 - Reduce Android five-second continuous connectivity probing or make it network-event-aware after measuring reconnect behavior.
@@ -62,7 +62,7 @@ Release engineering is also hardened: release builds fail if the release keystor
 - Restore external Psiphon registry settings transactionally.
 - Centralize native/Dart VPN state constants and include a payload schema version.
 
-### P3 â€” optional
+### P3 — optional
 
 - Pin GitHub Actions by commit SHA and pin Flutter/JDK/.NET SDK versions for stronger reproducibility.
 - Expand the SBOM to include native binaries, Gradle/Maven, Flutter engine, and toolchain identity.
@@ -72,10 +72,10 @@ Release engineering is also hardened: release builds fail if the release keystor
 
 ### Implemented and verified
 
-- Existing Windows CoreChecks and Release build.
-- Existing Flutter static analysis and unit/widget tests.
+- Windows CoreChecks and production Release build: passed.
+- Flutter static analysis: no issues; all 54 unit/widget tests passed.
 - Watchdog executable-identity regression checks.
-- Debug Android build, which exercises Kotlin/Gradle compilation without requiring release publication.
+- Android debug Kotlin/Gradle compilation: BUILD SUCCESSFUL.
 - Release signing configuration fails closed by construction; the official release script verifies the expected certificate.
 
 ### Implemented but not device-tested
