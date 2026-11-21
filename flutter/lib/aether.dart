@@ -322,8 +322,19 @@ class Aether {
       return false;
     }
   }
-  static Future<bool> vpnStop() async =>
-      await _ch.invokeMethod<bool>('vpnStop') ?? false;
+
+  // Completes only after native tun2socks has stopped and the TUN is closed.
+  static Future<bool> vpnStop() async {
+    try {
+      return await _ch
+              .invokeMethod<bool>('vpnStop')
+              .timeout(const Duration(seconds: 10)) ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   // Proxy mode: the same service without a tun, only so Android keeps the app alive in the background.
   static Future<bool> keepAlive() async =>
       await _ch.invokeMethod<bool>('keepAlive') ?? false;

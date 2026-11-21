@@ -116,6 +116,14 @@ No before/after speed, throughput, CPU, RAM, or battery improvement is claimed w
 - `.gitignore`
 - `docs/AUDIT_PROGRESS.md`
 
+## Android reconnection fix
+
+Confirmed root cause: the ordinary network-loss path terminated the Aether core but left the old TUN and native hev-socks5-tunnel worker active, then started the next protocol against that stale in-process VPN session. In addition, `vpnStop` previously acknowledged only Android service-command dispatch, so retry could begin before native teardown completed. Killing the app cleared both Java static ownership and native singleton state, explaining why process restart recovered immediately.
+
+The fix introduces one teardown barrier for network loss, explicit protocol switching, startup failure, user disconnect, and final cleanup: native VPN stop must be acknowledged, ownership must become false, the old core must exit, and proxy ports must be free before another protocol starts. `AetherVpn` now reconciles Java ownership with `TProxyIsRunning()`, invokes native stop even when the Java descriptor is already missing, reports teardown failure, and logs native/Java state at each boundary. `MainActivity` keeps `vpnStop` pending until the terminal native state broadcast.
+
+Locally verified: Flutter analysis passes, all 55 tests pass, and Kotlin debug compilation succeeds. Real Wi-Fi/mobile interruption, Doze, and repeated TUN lifecycle acceptance tests still require a physical Android device.
+
 ## Exact next steps
 
 1. Implement transactional WinINet proxy snapshot/restore with ownership and crash-safe persistence.

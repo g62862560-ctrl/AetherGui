@@ -22,7 +22,8 @@ class AetherVpn : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             STOP, DISCONNECT -> {
-                stop("disconnected", reason = "requested")
+                val stopped = stop("disconnected", reason = "requested")
+                if (!stopped) Log.e(TAG, "native teardown failed during requested stop")
                 stopSelfResult(startId)
                 return START_NOT_STICKY
             }
@@ -34,11 +35,18 @@ class AetherVpn : VpnService() {
             }
         }
 
-        // A repeated start for the same live service is idempotent. Replacing an
-        // active native tunnel in-place can make an older stop tear down the new FD.
-        if (tun != null || tunnelOwned.get()) {
+        // Java ownership is valid only while both the descriptor and native worker live.
+        // Process death used to be the only way to clear a stale half-owned session.
+        val nativeRunning = nativeRunning()
+        Log.i(TAG, "start requested: tun=${tun != null}, owned=${tunnelOwned.get()}, native=$nativeRunning")
+        if (tun != null && tunnelOwned.get() && nativeRunning) {
             publishState("connected", owned = true)
             return START_NOT_STICKY
+        }
+        if (tun != null || tunnelOwned.get() || nativeRunning) {
+            Log.w(TAG, "reconciling stale VPN state before start")
+            val stopped = stop(null)
+            if (!stopped) return failStart("stale tun2socks session could not be stopped")
         }
         publishState("starting", owned = false)
         startForeground(NOTIFICATION_ID, notification(true))
@@ -129,7 +137,7 @@ class AetherVpn : VpnService() {
         super.onDestroy()
     }
 
-    private fun stop(finalState: String?, reason: String? = null) {
+    private fun stop(finalState: String?, reason: String? = null): Boolean {
         // Clear Java-side ownership before native teardown so concurrent queries
         // never report a tunnel whose close has already begun.
         val descriptor = tun
@@ -137,22 +145,49 @@ class AetherVpn : VpnService() {
         val wasOwned = tunnelOwned.getAndSet(false)
         val wasRunning = descriptor != null || wasOwned
         if (wasRunning) publishState("stopping", owned = false)
-        if (descriptor != null) {
-            try {
-                if (!TProxyStopService()) Log.w(TAG, "tun2socks reported stop failure")
-            } catch (e: Exception) {
-                Log.w(TAG, "tun2socks stop failed", e)
-            } finally {
+        var nativeStopped = true
+        try {
+            if (nativeRunning()) nativeStopped = TProxyStopService()
+            if (!nativeStopped) Log.w(TAG, "tun2socks reported stop failure")
+        } catch (e: Exception) {
+            nativeStopped = false
+            Log.w(TAG, "tun2socks stop failed", e)
+        } finally {
+            if (descriptor != null) {
                 try { descriptor.close() } catch (e: Exception) { Log.w(TAG, "tun close failed", e) }
             }
         }
-        if (finalState != null) publishState(finalState, owned = false, reason = reason)
+        val stillRunning = nativeRunning()
+        val stopped = nativeStopped && !stillRunning
+        Log.i(TAG, "stop completed: wasOwned=$wasOwned, nativeStopped=$nativeStopped, nativeRunning=$stillRunning")
+        if (finalState != null) publishState(
+            finalState,
+            owned = false,
+            error = if (stopped) null else "tun2socks did not stop cleanly",
+            reason = reason,
+            stopSucceeded = stopped,
+        )
+        return stopped
     }
 
-    private fun publishState(state: String, owned: Boolean, error: String? = null, reason: String? = null) {
+    private fun nativeRunning(): Boolean = try {
+        TProxyIsRunning()
+    } catch (e: Exception) {
+        Log.w(TAG, "could not query tun2socks state", e)
+        false
+    }
+
+    private fun publishState(
+        state: String,
+        owned: Boolean,
+        error: String? = null,
+        reason: String? = null,
+        stopSucceeded: Boolean = true,
+    ) {
         val intent = Intent(VPN_STATE_CHANGED).setPackage(packageName)
             .putExtra(EXTRA_STATE, state)
             .putExtra(EXTRA_OWNED, owned)
+            .putExtra(EXTRA_STOP_SUCCEEDED, stopSucceeded)
         error?.let { intent.putExtra(EXTRA_ERROR, it) }
         reason?.let { intent.putExtra(EXTRA_REASON, it) }
         sendBroadcast(intent)
@@ -173,6 +208,7 @@ class AetherVpn : VpnService() {
         const val EXTRA_OWNED = "owned"
         const val EXTRA_ERROR = "error"
         const val EXTRA_REASON = "reason"
+        const val EXTRA_STOP_SUCCEEDED = "stopSucceeded"
         const val EXTRA_PORT = "port"
         const val MTU = 8500
         const val DNS = "198.18.0.2"

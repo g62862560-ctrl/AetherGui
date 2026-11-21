@@ -95,6 +95,7 @@ class _HomePageState extends State<HomePage> {
   AetherProcess? _process;
   Cancel? _ct, _attempt;
   bool _nextRequested = false;
+  bool _vpnStartedBySession = false;
   bool _autoConnect = false;
   CoreOptions _coreOptions = const CoreOptions();
   int _preset = -1; // index into Aether.presets, -1 = Auto (rotate through all)
@@ -204,8 +205,9 @@ class _HomePageState extends State<HomePage> {
     _socksPortText.text = '${Aether.socksPort}';
     _testUrlText.text = Aether.testUrl;
     _trySecondsText.text = '$_trySeconds';
-    // A core left running by a previous screen: the app shows Disconnected, so end its VPN too.
-    if (Aether.killStale()) Aether.vpnStop();
+    // A stale core implies its VPN may still own native state. The next serialized
+    // connection performs acknowledged teardown before starting a replacement.
+    Aether.killStale();
     _saveSettings(); // persist the one-time Auto-order migration and defaults
     _checkUpdates(interactive: false);
     _loadVersion();
@@ -245,6 +247,8 @@ class _HomePageState extends State<HomePage> {
     );
     _addStep('VPN access was revoked; Aether stopped.', red);
     _ct?.cancel();
+    // onRevoke already stopped native tun2socks and closed the TUN.
+    _vpnStartedBySession = false;
     await _killProcessAndWait();
     if (!mounted) return;
     setState(() {
@@ -350,6 +354,24 @@ class _HomePageState extends State<HomePage> {
 
   // Auto: try the default presets, fastest past connect first; one that times out or drops is not retried until all others were tried.
   // A chosen preset is retried unless Next protocol is pressed.
+  Future<bool> _stopAttempt({Cancel? ct}) async {
+    _connection.transition(ConnectionPhase.stopping);
+    if (_vpn && (_vpnStartedBySession || _process != null)) {
+      final stopped = await Aether.vpnStop();
+      final active = await Aether.vpnActive();
+      if (!stopped || active) {
+        _logError(
+          'VPN teardown did not complete; retry blocked to avoid reusing stale native state.',
+        );
+        return false;
+      }
+      _vpnStartedBySession = false;
+    }
+    await _killProcessAndWait();
+    ct?.check();
+    return true;
+  }
+
   Future<void> _run(Cancel ct) async {
     final untried = <Preset>[];
     var chosen = _preset;
@@ -369,6 +391,14 @@ class _HomePageState extends State<HomePage> {
           );
         }
         final p = untried.removeAt(0);
+        if (!await _stopAttempt(ct: ct)) {
+          _connection.transition(
+            ConnectionPhase.error,
+            message: 'The previous VPN session could not be released.',
+            reconnectAvailable: true,
+          );
+          return;
+        }
         final attempt = _attempt = Cancel(ct);
         try {
           if (_nextRequested) attempt.cancel();
@@ -380,14 +410,7 @@ class _HomePageState extends State<HomePage> {
           await attempt.delay(1000);
         } on Cancelled {
           if (ct.isCancelled) rethrow;
-          await _killProcessAndWait();
-          if (_vpn) {
-            await Aether.vpnStop();
-            for (var i = 0; i < 10 && await Aether.vpnActive(); i++) {
-              ct.check();
-              await ct.delay(100);
-            }
-          }
+          if (!await _stopAttempt(ct: ct)) return;
           if (chosen >= 0)
             chosen = Aether.nextPresetIndex(Aether.presets.indexOf(p));
           _step(
@@ -408,8 +431,7 @@ class _HomePageState extends State<HomePage> {
     } finally {
       _attempt = null;
       _nextRequested = false;
-      Aether.vpnStop();
-      await _killProcessAndWait();
+      await _stopAttempt();
       _setStatus('Disconnected', red);
       _setDelay('');
       _route = null;
@@ -449,13 +471,19 @@ class _HomePageState extends State<HomePage> {
     _connection.transition(ConnectionPhase.preparing);
     // Let an old aether process release its ports before starting a new one.
     Aether.killStale();
+    var portsFree = false;
     for (var i = 0; i < 25; i++) {
       ct.check();
-      if (await Aether.portFree(Aether.socksPort) &&
-          await Aether.portFree(Aether.httpPort)) {
-        break;
-      }
+      portsFree =
+          await Aether.portFree(Aether.socksPort) &&
+          await Aether.portFree(Aether.httpPort);
+      if (portsFree) break;
       await ct.delay(200);
+    }
+    if (!portsFree) {
+      _logError('Previous core still owns a proxy port; retry blocked.');
+      _addStep('Previous core did not release its proxy ports.', red);
+      return;
     }
 
     ct.check();
@@ -497,8 +525,10 @@ class _HomePageState extends State<HomePage> {
       _connection.transition(ConnectionPhase.startingVpn);
       if (await Aether.vpnActive()) {
         vpnStarted = true;
+        _vpnStartedBySession = true;
       } else {
         vpnStarted = await Aether.vpnStart();
+        if (vpnStarted) _vpnStartedBySession = true;
       }
     }
 
@@ -516,8 +546,10 @@ class _HomePageState extends State<HomePage> {
       _step,
       realDelayTest,
     );
-    if (portConflict)
-      return _killProcessAndWait(); // says nothing about this preset
+    if (portConflict) {
+      await _stopAttempt(ct: ct); // says nothing about this preset
+      return;
+    }
     _connectMs[Aether.presets.indexOf(p)] = connected
         ? took.elapsedMilliseconds
         : -1;
@@ -552,7 +584,7 @@ class _HomePageState extends State<HomePage> {
       // Keep the core's own message: it says why, this line only says what happened.
       coreFailed ? _log(failure) : _logError(failure);
       _addStep(failure, red);
-      await _killProcessAndWait();
+      await _stopAttempt(ct: ct);
       return;
     }
 
@@ -578,14 +610,16 @@ class _HomePageState extends State<HomePage> {
     } else if (vpnStarted && await Aether.vpnActive()) {
       _step('VPN on: all apps go through aether.', seaGreen);
     } else {
-      _logError('VPN did not establish; stopping to avoid an unprotected session.');
+      _logError(
+        'VPN did not establish; stopping to avoid an unprotected session.',
+      );
       _addStep('VPN did not establish; connection stopped.', red);
       _connection.transition(
         ConnectionPhase.error,
         message: 'Android did not confirm ownership of the VPN tunnel.',
         reconnectAvailable: true,
       );
-      await _killProcessAndWait();
+      await _stopAttempt(ct: ct);
       return;
     }
     if (!realDelayTest) {
@@ -600,10 +634,10 @@ class _HomePageState extends State<HomePage> {
         fails = ms == null ? fails + 1 : 0;
       }
     }
-    _logError('${p.name}: connection lost, switching.');
+    _logError('${p.name}: connection lost, resetting VPN before switching.');
     _exitInfo = null;
-    _addStep('${p.name}: connection lost, switching.', red);
-    await _killProcessAndWait();
+    _addStep('${p.name}: connection lost; resetting VPN.', red);
+    await _stopAttempt(ct: ct);
   }
 
   // Every preset needs this port, so rotating on cannot help: stop and let the user choose.

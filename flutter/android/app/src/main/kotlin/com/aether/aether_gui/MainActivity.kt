@@ -17,6 +17,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private var pendingConsent: Pair<Int, MethodChannel.Result>? = null
     private var pendingStart: MethodChannel.Result? = null
+    private var pendingStop: MethodChannel.Result? = null
     private var channel: MethodChannel? = null
     private var receiverRegistered = false
     private val vpnReceiver = object : BroadcastReceiver() {
@@ -25,6 +26,7 @@ class MainActivity : FlutterActivity() {
             val state = intent.getStringExtra(AetherVpn.EXTRA_STATE)
             val owned = intent.getBooleanExtra(AetherVpn.EXTRA_OWNED, false)
             val error = intent.getStringExtra(AetherVpn.EXTRA_ERROR)
+            val stopSucceeded = intent.getBooleanExtra(AetherVpn.EXTRA_STOP_SUCCEEDED, true)
             channel?.invokeMethod("vpnState", hashMapOf(
                 "state" to state,
                 "owned" to owned,
@@ -33,8 +35,14 @@ class MainActivity : FlutterActivity() {
             ))
             when {
                 state == "connected" && owned -> completePendingStart(true)
-                state == "error" -> completePendingStart(false, error)
-                state == "disconnected" -> completePendingStart(false, "VPN stopped before it was ready")
+                state == "error" -> {
+                    completePendingStart(false, error)
+                    completePendingStop(false, error)
+                }
+                state == "disconnected" -> {
+                    completePendingStart(false, "VPN stopped before it was ready")
+                    completePendingStop(stopSucceeded, error)
+                }
             }
         }
     }
@@ -85,8 +93,7 @@ class MainActivity : FlutterActivity() {
                 }
                 "keepAlive" -> result.success(dispatchService(Intent(this, AetherVpn::class.java)
                     .setAction(AetherVpn.KEEP_ALIVE)))
-                "vpnStop" -> result.success(dispatchService(Intent(this, AetherVpn::class.java)
-                    .setAction(AetherVpn.STOP)))
+                "vpnStop" -> beginVpnStop(result)
                 else -> result.notImplemented()
             }
             }
@@ -111,6 +118,7 @@ class MainActivity : FlutterActivity() {
         pendingConsent?.second?.success(false)
         pendingConsent = null
         completePendingStart(false, "Flutter engine closed")
+        completePendingStop(false, "Flutter engine closed")
         channel?.setMethodCallHandler(null)
         channel = null
         super.cleanUpFlutterEngine(flutterEngine)
@@ -150,6 +158,21 @@ class MainActivity : FlutterActivity() {
         if (success) result.success(true)
         else if (error != null) result.error("vpn_start", error, null)
         else result.success(false)
+    }
+
+    private fun beginVpnStop(result: MethodChannel.Result) {
+        pendingStop?.success(false)
+        pendingStop = result
+        if (!dispatchService(Intent(this, AetherVpn::class.java).setAction(AetherVpn.STOP))) {
+            completePendingStop(false, "Unable to stop the VPN service")
+        }
+    }
+
+    private fun completePendingStop(success: Boolean, error: String? = null) {
+        val result = pendingStop ?: return
+        pendingStop = null
+        if (success) result.success(true)
+        else result.error("vpn_stop", error ?: "Native VPN teardown failed", null)
     }
 
     private fun startVpn(port: Int): Boolean = dispatchService(

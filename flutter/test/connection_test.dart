@@ -22,23 +22,50 @@ void main() {
     },
   );
 
-  test('vpn start succeeds only when the native call acknowledges ownership', () async {
-    const channel = MethodChannel('aether');
-    final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-    messenger.setMockMethodCallHandler(channel, (call) async {
-      expect(call.method, 'vpnStart');
-      expect(call.arguments, Aether.socksPort);
-      return true;
-    });
-    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
-    expect(await Aether.vpnStart(), isTrue);
+  test(
+    'vpn start succeeds only when the native call acknowledges ownership',
+    () async {
+      const channel = MethodChannel('aether');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        expect(call.method, 'vpnStart');
+        expect(call.arguments, Aether.socksPort);
+        return true;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      expect(await Aether.vpnStart(), isTrue);
 
-    messenger.setMockMethodCallHandler(
-      channel,
-      (_) async => throw PlatformException(code: 'vpn_start', message: 'failed'),
-    );
-    expect(await Aether.vpnStart(), isFalse);
-  });
+      messenger.setMockMethodCallHandler(
+        channel,
+        (_) async =>
+            throw PlatformException(code: 'vpn_start', message: 'failed'),
+      );
+      expect(await Aether.vpnStart(), isFalse);
+    },
+  );
+
+  test(
+    'vpn stop waits for native acknowledgement and rejects failure',
+    () async {
+      const channel = MethodChannel('aether');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        expect(call.method, 'vpnStop');
+        return true;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      expect(await Aether.vpnStop(), isTrue);
+
+      messenger.setMockMethodCallHandler(
+        channel,
+        (_) async =>
+            throw PlatformException(code: 'vpn_stop', message: 'stale'),
+      );
+      expect(await Aether.vpnStop(), isFalse);
+    },
+  );
 
   test('native state validates payload', () {
     expect(NativeVpnState.from(null), isNull);
