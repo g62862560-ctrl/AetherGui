@@ -1,7 +1,7 @@
 name: aether_gui
 description: "Flutter port of Aether GUI (Android)."
 publish_to: 'none'
-version: 1.0.23+24
+version: 1.0.24+25
 environment:
   sdk: ^3.12.2
 
