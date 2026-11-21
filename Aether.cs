@@ -327,13 +327,12 @@ static class Aether
                 .TryGetProperty("browser_download_url", out var u) ? u.GetString() : null;
 
             var zipUrl = Asset("aether-windows-x86_64.zip") ?? throw new Exception("no Windows asset in the latest release");
+            var shaUrl = Asset("aether-windows-x86_64.zip.sha256")
+                ?? throw new InvalidDataException("required SHA-256 checksum asset is missing; download refused");
+            var checksum = await http.GetStringAsync(shaUrl, ct);
             var zip = await http.GetByteArrayAsync(zipUrl, ct);
-            if (Asset("aether-windows-x86_64.zip.sha256") is { } shaUrl)
-            {
-                var expected = (await http.GetStringAsync(shaUrl, ct)).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)[0];
-                if (!Convert.ToHexString(SHA256.HashData(zip)).Equals(expected, StringComparison.OrdinalIgnoreCase))
-                    throw new Exception("SHA-256 mismatch, download discarded");
-            }
+            VerifyCoreChecksum(zip, checksum);
+            ct.ThrowIfCancellationRequested();
             using var archive = new ZipArchive(new MemoryStream(zip));
             if (archive.GetEntry("aether.exe") is null) throw new Exception("aether.exe not in the archive");
             archive.ExtractToDirectory(Dir, true);
@@ -345,6 +344,16 @@ static class Aether
             log($"Download failed: {ex.Message}");
             return false;
         }
+    }
+
+    internal static void VerifyCoreChecksum(byte[] archive, string? checksum)
+    {
+        var fields = (checksum ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (fields.Length is < 1 or > 2 || fields[0].Length != 64 || !fields[0].All(Uri.IsHexDigit)
+            || (fields.Length == 2 && fields[1].TrimStart('*') != "aether-windows-x86_64.zip"))
+            throw new InvalidDataException("Missing or malformed SHA-256 checksum; download refused");
+        if (!Convert.ToHexString(SHA256.HashData(archive)).Equals(fields[0], StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("SHA-256 mismatch, download discarded");
     }
 
     public static ProcessStartInfo CreateStartInfo(Preset p, CoreOptions options, string scan = "turbo")

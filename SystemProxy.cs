@@ -31,22 +31,83 @@ Get-Process aether -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq '
 Get-Process psiphon3 -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq '{PsiphonExe}' }} | Stop-Process -Force
 Get-Process tun2socks -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq '{TunExe}' }} | Stop-Process -Force
 Start-Sleep -Milliseconds 500
-$k = 'HKCU:\{KeyPath}'
-$port = (Get-ItemProperty 'HKCU:\Software\AetherGui' -ErrorAction SilentlyContinue).ProxyPort
-if (-not $port) {{ $port = {Aether.DefaultProxyPort} }} # read now: the port may have changed since this guard started
-$srv = (Get-ItemProperty $k).ProxyServer
-if ($srv -eq ""127.0.0.1:$port"" -or ($srv -like '*socks=127.0.0.1:*' -and -not (Get-Process psiphon3 -ErrorAction SilentlyContinue))) {{
-    Set-ItemProperty $k ProxyEnable 0
-    Add-Type -MemberDefinition '[DllImport(""wininet.dll"")] public static extern bool InternetSetOption(IntPtr h, int o, IntPtr b, int l);' -Name W -Namespace G
-    [G.W]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
-    [G.W]::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
-}}";
+& '{Environment.ProcessPath!.Replace("'", "''")}' --restore-proxy '{Owner}'";
         var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
         Process.Start(new ProcessStartInfo("cmd.exe", $"/c start \"\" /b powershell.exe -NoProfile -WindowStyle Hidden -EncodedCommand {encoded}")
         { CreateNoWindow = true, UseShellExecute = false });
     }
 
-    public static void Enable() => Set(1, Server);
+    public static void Enable() => Change(true);
+
+    private const string JournalPath = @"Software\AetherGui\ProxyTransaction";
+    private static readonly string Owner = Environment.ProcessId + ":" + Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks;
+    internal static string CurrentOwner => Owner;
+
+    private static void Change(bool enable, string? expectedOwner = null)
+    {
+        using var mutex = new Mutex(false, @"Local\AetherGui.ProxyTransaction");
+        try { if (!mutex.WaitOne(TimeSpan.FromSeconds(10))) throw new TimeoutException("Proxy transaction is busy"); }
+        catch (AbandonedMutexException) { }
+        try
+        {
+            using var key = Registry.CurrentUser.CreateSubKey(KeyPath);
+            using var journal = Registry.CurrentUser.CreateSubKey(JournalPath);
+            ApplyTransaction(key, journal, enable ? Server : null, Owner, expectedOwner);
+            InternetSetOption(IntPtr.Zero, 39, IntPtr.Zero, 0);
+            InternetSetOption(IntPtr.Zero, 37, IntPtr.Zero, 0);
+        }
+        finally { mutex.ReleaseMutex(); }
+    }
+
+    // The journal is flushed before any proxy mutation. Each original value retains its registry type.
+    // Recovery restores only values still equal to our write (or already equal to their original).
+    internal static void ApplyTransaction(RegistryKey key, RegistryKey journal, string? server, string owner, string? expectedOwner = null)
+    {
+        string[] names = ["ProxyServer", "ProxyOverride", "ProxyEnable"];
+        object[] desired = [server ?? "", Bypass, 1];
+        if (server != null && journal.GetValue("Ready") is 1)
+        {
+            if ((string?)journal.GetValue("Owner") == owner && Equals(journal.GetValue("Written0"), server)
+                && names.Select((n, i) => Equals(key.GetValue(n), journal.GetValue("Written" + i))).All(x => x))
+                return;
+            ApplyTransaction(key, journal, null, owner);
+        }
+        if (server != null)
+        {
+            for (var i = 0; i < names.Length; i++)
+            {
+                var original = key.GetValue(names[i], null, RegistryValueOptions.DoNotExpandEnvironmentNames);
+                journal.SetValue("Present" + i, original == null ? 0 : 1);
+                if (original != null) journal.SetValue("Original" + i, original, key.GetValueKind(names[i]));
+                else journal.DeleteValue("Original" + i, false);
+                journal.SetValue("Written" + i, desired[i]);
+            }
+            journal.SetValue("Owner", owner);
+            journal.SetValue("Ready", 1);
+            journal.Flush();
+            try
+            {
+                for (var i = 0; i < names.Length; i++) key.SetValue(names[i], desired[i]);
+                key.Flush();
+            }
+            catch { ApplyTransaction(key, journal, null, owner); throw; }
+            return;
+        }
+        if (journal.GetValue("Ready") is not 1 || (expectedOwner != null && (string?)journal.GetValue("Owner") != expectedOwner)) return;
+        for (var i = 0; i < names.Length; i++)
+        {
+            var current = key.GetValue(names[i], null, RegistryValueOptions.DoNotExpandEnvironmentNames);
+            var original = journal.GetValue("Original" + i, null, RegistryValueOptions.DoNotExpandEnvironmentNames);
+            if (!Equals(current, journal.GetValue("Written" + i))
+                || key.GetValueKind(names[i]) != journal.GetValueKind("Written" + i)) continue; // preserve external edits
+            if (journal.GetValue("Present" + i) is 1)
+                key.SetValue(names[i], original!, journal.GetValueKind("Original" + i));
+            else key.DeleteValue(names[i], false);
+        }
+        key.Flush();
+        journal.DeleteValue("Ready", false);
+        journal.Flush();
+    }
 
     public static string Status()
     {
@@ -56,25 +117,5 @@ if ($srv -eq ""127.0.0.1:$port"" -or ($srv -like '*socks=127.0.0.1:*' -and -not 
         return on ? (srv == Server ? $"ON -> {srv} (ours)" : $"ON -> {srv} (NOT ours)") : "OFF";
     }
 
-    // Only touches the setting if it is ours, so a user's own proxy is never cleared.
-    // Psiphon's own one counts too once no psiphon3 runs: we kill it, so it can never restore it itself.
-    public static void Disable()
-    {
-        using var key = Registry.CurrentUser.OpenSubKey(KeyPath);
-        var srv = key?.GetValue("ProxyServer") as string;
-        if (srv == Server || IsDeadPsiphonProxy(srv)) Set(0, Server);
-    }
-
-    private static bool IsDeadPsiphonProxy(string? srv) =>
-        srv?.Contains("socks=127.0.0.1:") == true && Process.GetProcessesByName("psiphon3").Length == 0;
-
-    private static void Set(int enable, string server)
-    {
-        using var key = Registry.CurrentUser.OpenSubKey(KeyPath, true)!;
-        key.SetValue("ProxyServer", server);
-        key.SetValue("ProxyOverride", Bypass);
-        key.SetValue("ProxyEnable", enable);
-        InternetSetOption(IntPtr.Zero, 39, IntPtr.Zero, 0); // SETTINGS_CHANGED
-        InternetSetOption(IntPtr.Zero, 37, IntPtr.Zero, 0); // REFRESH
-    }
+    public static void Disable(string? expectedOwner = null) => Change(false, expectedOwner);
 }

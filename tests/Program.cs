@@ -34,6 +34,7 @@ static class Checks
     [STAThread]
     static void Main()
     {
+        SecurityChecks.Run();
         Check(TunMode.PowerShell("Write-Output \"Ethernet adapter\"").Trim() == "Ethernet adapter",
             "TUN PowerShell preserves embedded double quotes");
         var alias = "Ethernet O'Brien $adapter";

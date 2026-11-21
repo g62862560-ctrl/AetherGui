@@ -7,15 +7,28 @@ static class Program
     [STAThread]
     static void Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--restore-proxy")
+        {
+            SystemProxy.Disable(args[1]);
+            return;
+        }
+
         // Watchdog mode: a tiny second copy of this exe that outlives a crashed/killed GUI and undoes its changes.
         if (args.Length is 2 or 3 && args[0] == "--watchdog")
         {
-            try { Process.GetProcessById(int.Parse(args[1])).WaitForExit(); } catch { }
+            string? owner = null;
+            try
+            {
+                using var parent = Process.GetProcessById(int.Parse(args[1]));
+                owner = parent.Id + ":" + parent.StartTime.ToUniversalTime().Ticks;
+                parent.WaitForExit();
+            }
+            catch { }
             if (args.Length == 3 && int.TryParse(args[2], out var corePid))
                 KillOwnedCore(corePid);
             Psiphon.Kill();
             TunMode.Cleanup();
-            SystemProxy.Disable();
+            if (owner != null) SystemProxy.Disable(owner);
             return;
         }
 

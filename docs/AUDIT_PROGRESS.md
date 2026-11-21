@@ -47,9 +47,9 @@ Release engineering is also hardened: release builds fail if the release keystor
 
 ### P1 — confirmed, recommended next
 
-- `SystemProxy.cs` overwrites ProxyServer/ProxyOverride rather than transactionally snapshotting and restoring the exact previous values. A persisted ownership snapshot is needed for crash recovery and to avoid clobbering user changes.
+- **Implemented locally:** `SystemProxy.cs` now journals original proxy values (including absence and registry types) before mutation, serializes app-owned transactions with a named mutex, and restores only unchanged app-written values. Startup, watchdog and detached-guard recovery share this journal; guards check process-generation ownership. Isolated-registry regression checks pass. Arbitrary localhost/Psiphon proxies without a journal are no longer disabled heuristically. Registry writes are not OS-atomic against unrelated applications; real crash/power-loss and external-Psiphon integration still require validation.
 - `TunMode.cs` cleanup can remove routes not created by the current session and uses unbounded synchronous PowerShell waits. Persist an owned-route journal and use bounded asynchronous process execution.
-- `Aether.InstallCoreAsync` should require a checksum/signature and extract into a staging directory with path validation and atomic replacement.
+- **Partially implemented locally:** `Aether.InstallCoreAsync` now requires the SHA-256 asset, rejects missing/malformed/wrong-file/mismatched checksums before extraction, and checks cancellation before extraction. Regression checks pass. Staged extraction and atomic replacement remain outstanding; a checksum from the same release is integrity verification, not independent publisher authentication.
 - Android ownership is still process-static rather than generation-bound; add a start generation/token and a replayable native state snapshot for activity recreation.
 - Android JNI start/stop and config I/O run on the service main thread. Move them to a single serialized worker after instrumentation coverage exists.
 - Windows and Android need a dedicated singleton process manager so stale callbacks cannot affect a newer connection generation.
