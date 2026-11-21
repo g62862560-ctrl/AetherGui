@@ -114,9 +114,9 @@ class AetherProcess {
       await _exit!.timeout(timeout);
     } on TimeoutException {
       p.kill(ProcessSignal.sigkill);
-      try {
-        await _exit!.timeout(timeout);
-      } catch (_) {}
+      // Do not allow a replacement core when exit is unconfirmed: protocol
+      // helpers (notably Psiphon's datastore) must have a single owner.
+      await _exit!.timeout(timeout);
     }
   }
 }
@@ -553,6 +553,15 @@ class Aether {
   static final _wrapped = RegExp(r'^Other\("(.*)"\)$');
 
   // The message of a core output line that reports an error, or null for any other line.
+  static int? torBootstrapProgress(String line) {
+    final match = RegExp(
+      r'\b(?:Bootstrapped\s+|tor\s+reaching\s+the\s+network:\s*)(\d{1,3})%',
+      caseSensitive: false,
+    ).firstMatch(line);
+    final percent = int.tryParse(match?.group(1) ?? '');
+    return percent != null && percent <= 100 ? percent : null;
+  }
+
   static String? coreError(String line) {
     final m = _errorLine.firstMatch(line.replaceAll(_ansi, '').trim());
     if (m == null) return null;

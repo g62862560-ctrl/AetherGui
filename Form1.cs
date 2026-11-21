@@ -235,7 +235,8 @@ public partial class Form1 : Form
                 }
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) { Log("Connection loop canceled."); }
+        catch (Exception ex) { Log($"Connection loop stopped ({ex.GetType().Name}): {ex.Message}"); }
         finally
         {
             _attemptCts = null;
@@ -257,6 +258,12 @@ public partial class Form1 : Form
         SetStatus($"Connecting: {p.Name}", Palette.Connecting);
         exitPanel.Visible = false;
         _exitInfo = null;
+        if (_process is not null)
+        {
+            KillProcess();
+            if (_process is not null)
+                throw new InvalidOperationException("Previous core has not exited; reconnect blocked.");
+        }
         var proc = _process = Aether.Start(p, Log, _coreOptions, scan);
         if (proc is null) return;
 
@@ -374,8 +381,8 @@ public partial class Form1 : Form
     {
         TunMode.Disable(); // drop the TUN default route before the proxy it points at dies
         SystemProxy.Disable(); // never leave the system pointing at a dead proxy
-        try { if (_process is { HasExited: false }) { _process.Kill(true); _process.WaitForExit(2000); } } catch { }
-        _process?.Dispose();
+        if (_process is null || !Aether.StopProcess(_process, message => Log(message))) return;
+        _process.Dispose();
         _process = null;
     }
 
@@ -518,6 +525,9 @@ public partial class Form1 : Form
         lblStatus.Text = "\u25CF " + text;
         lblStatus.AccessibleName = "Connection status: " + text;
         lblStatus.ForeColor = color;
+        prgConnecting.Style = SystemInformation.UIEffectsEnabled ? ProgressBarStyle.Marquee : ProgressBarStyle.Continuous;
+        prgConnecting.Value = 0;
+        prgConnecting.AccessibleName = "Connection progress";
         prgConnecting.Visible = color == Palette.Connecting;
         AnimateConnectButton(color == Palette.Connecting);
     }
@@ -561,6 +571,15 @@ public partial class Form1 : Form
         {
             try { BeginInvoke(() => Log(msg, color)); } catch (InvalidOperationException) { }
             return;
+        }
+        if (Aether.TorBootstrapProgress(msg) is int percent && lblStatus.ForeColor == Palette.Connecting)
+        {
+            prgConnecting.Style = ProgressBarStyle.Continuous;
+            prgConnecting.Value = percent;
+            prgConnecting.AccessibleName = $"Tor bootstrap: {percent}%";
+            var caption = lblStatus.Text.Split(" · Tor bootstrap:")[0];
+            lblStatus.Text = $"{caption} · Tor bootstrap: {percent}%";
+            lblStatus.AccessibleName = lblStatus.Text;
         }
         if (Aether.ParseExit(msg) is { } exit) ShowExit(exit);
         color ??= LogColor(msg);

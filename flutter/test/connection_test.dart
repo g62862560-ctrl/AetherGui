@@ -107,6 +107,46 @@ void main() {
     },
   );
 
+  test('core stop confirms exit before releasing owned pid metadata', () async {
+    final dir = Directory.systemTemp.createTempSync('aether-core-stop-');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final process = await Process.start(Platform.resolvedExecutable, [
+      '--version',
+    ]);
+    final file = File('${dir.path}/core.pid')
+      ..writeAsStringSync('${process.pid}');
+    final core = AetherProcess(process, file);
+    await core.stop();
+    await process.exitCode;
+    expect(core.exited, isTrue);
+    expect(file.existsSync(), isFalse);
+    await core.stop();
+  });
+
+  test('Tor bootstrap parses real percentages, not unrelated progress', () {
+    expect(
+      Aether.torBootstrapProgress(
+        '[notice] Bootstrapped 43% (loading): Loading',
+      ),
+      43,
+    );
+    expect(Aether.torBootstrapProgress('Bootstrapped 100% (done): Done'), 100);
+    expect(Aether.torBootstrapProgress('Bootstrapped 0% (starting)'), 0);
+    expect(Aether.torBootstrapProgress('Bootstrapped 101%'), isNull);
+    expect(Aether.torBootstrapProgress('download 43%'), isNull);
+    expect(Aether.torBootstrapProgress('tor reaching the network: 15%'), 15);
+    expect(
+      Aether.torBootstrapProgress(
+        '[INFO aether::tor] tor reaching the network: 100%',
+      ),
+      100,
+    );
+    expect(
+      Aether.torBootstrapProgress('tor reaching the network: 101%'),
+      isNull,
+    );
+  });
+
   test('native state validates payload', () {
     expect(NativeVpnState.from(null), isNull);
     expect(NativeVpnState.from({'owned': true}), isNull);

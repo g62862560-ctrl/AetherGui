@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Http;
 using AetherGui;
 
 static class Checks
@@ -7,6 +8,27 @@ static class Checks
     {
         if (!condition) throw new Exception(name);
         Console.WriteLine("PASS: " + name);
+    }
+
+    sealed class TrackedContent : StringContent
+    {
+        public bool Disposed;
+        public TrackedContent() : base("") { }
+        protected override void Dispose(bool disposing)
+        {
+            Disposed = true;
+            base.Dispose(disposing);
+        }
+    }
+
+    sealed class CancelingProbeHandler(CancellationTokenSource cancellation) : HttpMessageHandler
+    {
+        public TrackedContent Content = new();
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            cancellation.Cancel();
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = Content });
+        }
     }
 
     [STAThread]
@@ -29,6 +51,29 @@ static class Checks
             Check(ProcessOwnership.MatchesExecutable(current, current.MainModule!.FileName), "Watchdog accepts an exact executable path");
             Check(!ProcessOwnership.MatchesExecutable(current, Path.Combine(Path.GetTempPath(), "aether.exe")),
                 "Watchdog rejects an unrelated executable path");
+        }
+
+        using (var invalidProcess = new Process())
+        {
+            var diagnostics = new List<string>();
+            Check(!Aether.StopProcess(invalidProcess, diagnostics.Add), "Unconfirmed process exit blocks replacement");
+            Check(diagnostics.Any(s => s.Contains("replacement blocked")), "Cleanup failure is diagnosed");
+        }
+        using (var child = Process.Start(new ProcessStartInfo("cmd.exe", "/c ping -n 30 127.0.0.1 > nul")
+        { UseShellExecute = false, CreateNoWindow = true })!)
+        {
+            Check(Aether.StopProcess(child, _ => { }) && child.HasExited, "Core stop confirms exit before replacement");
+            Check(Aether.StopProcess(child, _ => { }), "Already exited core cleanup is idempotent");
+        }
+        using (var cancel = new CancellationTokenSource())
+        using (var handler = new CancelingProbeHandler(cancel))
+        using (var client = new HttpClient(handler))
+        {
+            bool canceled = false;
+            try { Aether.PingAsync(client, "http://localhost/probe", cancel.Token).GetAwaiter().GetResult(); }
+            catch (OperationCanceledException) { canceled = true; }
+            Check(canceled, "Cancellation wins over a late successful probe response");
+            Check(handler.Content.Disposed, "Canceled probe response content is disposed");
         }
 
         var options = CoreOptions.Parse("[\"--tor-bridge\",\"obfs4 1.2.3.4:443 cert=abc iat-mode=0\"]",
@@ -295,6 +340,14 @@ static class Checks
             Check(flag.Image is not null && flag.AccessibleName == "Exit country: Germany"
                 && panel.AccessibleName == "Exit country: Germany", "Exit badge uses flag with country-only accessibility");
         }
+        Check(Aether.TorBootstrapProgress("[notice] Bootstrapped 43% (loading): Loading") == 43
+            && Aether.TorBootstrapProgress("tor reaching the network: 15%") == 15
+            && Aether.TorBootstrapProgress("[INFO aether::tor] tor reaching the network: 100%") == 100
+            && Aether.TorBootstrapProgress("tor reaching the network: 101%") is null
+            && Aether.TorBootstrapProgress("Bootstrapped 100% (done)") == 100
+            && Aether.TorBootstrapProgress("Bootstrapped 0%") == 0
+            && Aether.TorBootstrapProgress("Bootstrapped 101%") is null
+            && Aether.TorBootstrapProgress("download 43%") is null, "Tor bootstrap percentages validated");
         Check(Form1.LogColor("Could not start the core") == Palette.Disconnected, "Errors are red in the log");
         Check(Form1.LogColor("Switching to WireGuard") == Palette.Connecting, "Route switches are amber in the log");
         Check(Form1.LogColor("Connected: MASQUE") == Palette.Connected, "Connections are green in the log");

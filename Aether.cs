@@ -425,6 +425,31 @@ static class Aether
         finally { if (!proc.HasExited) proc.Kill(true); }
     }
 
+    // Keep ownership on failure: callers must not replace a core whose exit is unconfirmed.
+    internal static bool StopProcess(Process process, Action<string> log, int timeoutMs = 2000)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                log($"Stopping core PID {process.Id}.");
+                process.Kill(true);
+                if (!process.WaitForExit(timeoutMs))
+                {
+                    log($"Core PID {process.Id}: exit not confirmed after {timeoutMs} ms; replacement blocked.");
+                    return false;
+                }
+            }
+            log($"Core PID {process.Id} exited (code {process.ExitCode}).");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            log($"Core cleanup failed ({ex.GetType().Name}): {ex.Message}; replacement blocked.");
+            return false;
+        }
+    }
+
     // Waits for the proxy and, unless disabled, a passing internet test. Gives up once the startup budget is spent
     // and the proxy has been up for ConnectTimeoutMs without passing (tor opens its port long before it can carry traffic).
     public static async Task<(bool Connected, int? DelayMs)> WaitConnectedAsync(
@@ -455,6 +480,12 @@ static class Aether
 
     // "[+] masque-in-masque exit: 104.28.214.161, IR via FRA, 448ms to cloudflare, warp on"
     // Null when the line is not an exit line (or the IP part is not a dotted IPv4).
+    public static int? TorBootstrapProgress(string line)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(line, @"\b(?:Bootstrapped\s+|tor\s+reaching\s+the\s+network:\s*)(\d{1,3})%", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        return match.Success && int.TryParse(match.Groups[1].Value, out var percent) && percent <= 100 ? percent : null;
+    }
+
     public static ExitInfo? ParseExit(string line)
     {
         var marker = line.IndexOf(" exit: ", StringComparison.Ordinal);
@@ -488,14 +519,18 @@ static class Aether
     // Embedded flag image for a country the selector ships; null for others (the display falls back to text).
     public static Image? CountryFlag(string code) => Psiphon.Countries.FirstOrDefault(c => c.Code == code)?.Flag;
 
-    public static async Task<int?> PingAsync(CancellationToken ct)
+    public static Task<int?> PingAsync(CancellationToken ct) => PingAsync(Http, TestUrl, ct);
+
+    internal static async Task<int?> PingAsync(HttpClient client, string url, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var sw = Stopwatch.StartNew();
         try
         {
-            using var req = new HttpRequestMessage(HttpMethod.Get, TestUrl);
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
             req.Headers.ConnectionClose = true;
-            using var res = await Http.SendAsync(req, ct);
+            using var res = await client.SendAsync(req, ct);
+            ct.ThrowIfCancellationRequested();
             // Any success counts, since user URLs may answer 200 rather than 204.
             return (int)res.StatusCode < 400 ? (int)sw.ElapsedMilliseconds : null;
         }

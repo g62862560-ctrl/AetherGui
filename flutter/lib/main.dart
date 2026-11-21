@@ -356,13 +356,22 @@ class _HomePageState extends State<HomePage> {
   // A chosen preset is retried unless Next protocol is pressed.
   Future<bool> _stopAttempt({Cancel? ct}) async {
     _connection.transition(ConnectionPhase.stopping);
-    if (_vpn && (_vpnStartedBySession || _process != null)) {
+    _log(
+      'Lifecycle: stopping attempt; core=${_process?.p.pid}, vpnOwned=$_vpnStartedBySession.',
+    );
+    if (_vpn &&
+        (_vpnStartedBySession ||
+            _process != null ||
+            await Aether.vpnActive())) {
       final stopped = await Aether.vpnStop();
       final active = await Aether.vpnActive();
       if (!stopped || active) {
         _logError(
           'VPN teardown did not complete; retry blocked to avoid reusing stale native state.',
         );
+        // Do not leave the core and its protocol helpers alive after a failed
+        // native stop. The next explicit connect will reconcile native state.
+        await _killProcessAndWait();
         return false;
       }
       _vpnStartedBySession = false;
@@ -452,6 +461,15 @@ class _HomePageState extends State<HomePage> {
     _setStatus('Connecting: ${p.name}', orange);
     var coreFailed = false, portConflict = false;
     void coreLog(String line) {
+      final progress = Aether.torBootstrapProgress(line);
+      if (!ct.isCancelled &&
+          mounted &&
+          _statusColor == orange &&
+          progress != null &&
+          progress != _torProgress) {
+        setState(() => _torProgress = progress);
+        _step('Tor bootstrap: $progress%');
+      }
       final error = Aether.coreError(line);
       _log(line, error == null ? null : red);
       // A working session can log passing errors; those stay in the activity log.
@@ -727,9 +745,11 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _killProcessAndWait() async {
     final proc = _process;
-    _process = null;
     if (proc == null) return;
+    _log('Lifecycle: stopping core pid=${proc.p.pid}.');
     await proc.stop();
+    if (identical(_process, proc)) _process = null;
+    _log('Lifecycle: core pid=${proc.p.pid} exited; resources released.');
   }
 
   Future<void> _showCoreSettings() async {
@@ -916,9 +936,12 @@ class _HomePageState extends State<HomePage> {
     if (mounted) setState(() => _appVersion = version);
   }
 
+  int? _torProgress;
+
   void _setStatus(String text, Color color) {
     if (mounted)
       setState(() {
+        _torProgress = null;
         _status = text;
         _statusColor = color;
       });
@@ -1071,6 +1094,25 @@ class _HomePageState extends State<HomePage> {
                   ),
                   const SizedBox(height: 16),
                   _routeLine(),
+                  if (_statusColor == orange &&
+                      (_route?.toLowerCase().contains('tor') ?? false)) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      _torProgress == null
+                          ? 'Tor: waiting for bootstrap progress…'
+                          : 'Tor reaching the network: $_torProgress%',
+                    ),
+                    const SizedBox(height: 6),
+                    LinearProgressIndicator(
+                      key: const Key('torBootstrapProgress'),
+                      value: _torProgress == null ? null : _torProgress! / 100,
+                      semanticsLabel: 'Tor bootstrap',
+                      semanticsValue: _torProgress == null
+                          ? 'Waiting'
+                          : '$_torProgress%',
+                      minHeight: 6,
+                    ),
+                  ],
                   // Once connected, stats sit in small cards; the exit country flag is on the route row.
                   if (_statusColor == seaGreen) ...[
                     const SizedBox(height: 12),
