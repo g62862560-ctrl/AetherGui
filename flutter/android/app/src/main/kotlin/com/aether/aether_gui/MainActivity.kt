@@ -15,18 +15,26 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
-    private var pending: Pair<Int, MethodChannel.Result>? = null
+    private var pendingConsent: Pair<Int, MethodChannel.Result>? = null
+    private var pendingStart: MethodChannel.Result? = null
     private var channel: MethodChannel? = null
     private var receiverRegistered = false
     private val vpnReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.action) {
-                AetherVpn.VPN_STATE_CHANGED -> channel?.invokeMethod("vpnState", hashMapOf(
-                    "state" to intent.getStringExtra(AetherVpn.EXTRA_STATE),
-                    "owned" to intent.getBooleanExtra(AetherVpn.EXTRA_OWNED, false),
-                    "error" to intent.getStringExtra(AetherVpn.EXTRA_ERROR),
-                    "reason" to intent.getStringExtra(AetherVpn.EXTRA_REASON),
-                ))
+            if (intent?.action != AetherVpn.VPN_STATE_CHANGED) return
+            val state = intent.getStringExtra(AetherVpn.EXTRA_STATE)
+            val owned = intent.getBooleanExtra(AetherVpn.EXTRA_OWNED, false)
+            val error = intent.getStringExtra(AetherVpn.EXTRA_ERROR)
+            channel?.invokeMethod("vpnState", hashMapOf(
+                "state" to state,
+                "owned" to owned,
+                "error" to error,
+                "reason" to intent.getStringExtra(AetherVpn.EXTRA_REASON),
+            ))
+            when {
+                state == "connected" && owned -> completePendingStart(true)
+                state == "error" -> completePendingStart(false, error)
+                state == "disconnected" -> completePendingStart(false, "VPN stopped before it was ready")
             }
         }
     }
@@ -62,14 +70,14 @@ class MainActivity : FlutterActivity() {
                         result.success(true)
                     } else {
                         val consent = VpnService.prepare(this)
-                        if (consent == null) result.success(startVpn(port))
+                        if (consent == null) beginVpnStart(port, result)
                         else {
-                            pending?.second?.success(false)
-                            pending = port to result
+                            pendingConsent?.second?.success(false)
+                            pendingConsent = port to result
                             try {
                                 startActivityForResult(consent, VPN_CONSENT)
                             } catch (e: Exception) {
-                                pending = null
+                                pendingConsent = null
                                 result.error("vpn_consent", e.message ?: "Unable to request VPN consent", null)
                             }
                         }
@@ -100,8 +108,9 @@ class MainActivity : FlutterActivity() {
             unregisterReceiver(vpnReceiver)
             receiverRegistered = false
         }
-        pending?.second?.success(false)
-        pending = null
+        pendingConsent?.second?.success(false)
+        pendingConsent = null
+        completePendingStart(false, "Flutter engine closed")
         channel?.setMethodCallHandler(null)
         channel = null
         super.cleanUpFlutterEngine(flutterEngine)
@@ -129,6 +138,20 @@ class MainActivity : FlutterActivity() {
         return false
     }
 
+    private fun beginVpnStart(port: Int, result: MethodChannel.Result) {
+        pendingStart?.success(false)
+        pendingStart = result
+        if (!startVpn(port)) completePendingStart(false, "Unable to start the VPN service")
+    }
+
+    private fun completePendingStart(success: Boolean, error: String? = null) {
+        val result = pendingStart ?: return
+        pendingStart = null
+        if (success) result.success(true)
+        else if (error != null) result.error("vpn_start", error, null)
+        else result.success(false)
+    }
+
     private fun startVpn(port: Int): Boolean = dispatchService(
         Intent(this, AetherVpn::class.java).putExtra(AetherVpn.EXTRA_PORT, port),
     )
@@ -143,9 +166,10 @@ class MainActivity : FlutterActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != VPN_CONSENT) return
-        val (port, result) = pending ?: return
-        pending = null
-        result.success(resultCode == RESULT_OK && startVpn(port))
+        val (port, result) = pendingConsent ?: return
+        pendingConsent = null
+        if (resultCode == RESULT_OK) beginVpnStart(port, result)
+        else result.success(false)
     }
 
     companion object {

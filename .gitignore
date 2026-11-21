@@ -7,5 +7,6 @@ tun2socks/
 aether-tor/
 .claude/
 flutter/android/build/
+flutter/android/.kotlin/
 release-out/
 graphify-out/

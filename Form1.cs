@@ -356,7 +356,9 @@ public partial class Form1 : Form
     {
         if (_watchdogStarted) return;
         _watchdogStarted = true;
-        Process.Start(new ProcessStartInfo(Environment.ProcessPath!, $"--watchdog {Environment.ProcessId}") { CreateNoWindow = true, UseShellExecute = false });
+        var args = $"--watchdog {Environment.ProcessId}";
+        if (_process is { HasExited: false }) args += $" {_process.Id}";
+        Process.Start(new ProcessStartInfo(Environment.ProcessPath!, args) { CreateNoWindow = true, UseShellExecute = false });
         SystemProxy.StartIndependentGuard(Environment.ProcessId);
     }
 

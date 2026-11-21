@@ -2,7 +2,8 @@
 param(
     [Parameter(Mandatory = $true)]
     [ValidateScript({ Test-Path -LiteralPath $_ -PathType Leaf })]
-    [string]$ApkPath
+    [string]$ApkPath,
+    [string]$ExpectedCertificateSha256
 )
 
 $ErrorActionPreference = 'Stop'
@@ -33,7 +34,12 @@ try {
     $zip.Dispose()
 }
 
-$androidHome = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } elseif ($env:ANDROID_SDK_ROOT) { $env:ANDROID_SDK_ROOT } else { $null }
+$localProperties = Join-Path $PSScriptRoot '..\android\local.properties'
+$localSdk = if (Test-Path -LiteralPath $localProperties) {
+    $line = Get-Content -LiteralPath $localProperties | Where-Object { $_ -match '^sdk\.dir=' } | Select-Object -First 1
+    if ($line) { ($line -replace '^sdk\.dir=', '') -replace '\\\\', '\' } else { $null }
+} else { $null }
+$androidHome = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } elseif ($env:ANDROID_SDK_ROOT) { $env:ANDROID_SDK_ROOT } else { $localSdk }
 $apksigner = $null
 if ($androidHome) {
     $apksigner = Get-ChildItem -Path (Join-Path $androidHome 'build-tools') -Filter 'apksigner*' -Recurse -File -ErrorAction SilentlyContinue |
@@ -42,8 +48,18 @@ if ($androidHome) {
 }
 if ($apksigner) {
     Write-Host 'Signing certificate:'
-    & $apksigner.FullName verify --print-certs $apk
-    if ($LASTEXITCODE -ne 0) { throw "apksigner verification failed ($LASTEXITCODE)" }
+    $certificate = (& $apksigner.FullName verify --print-certs $apk 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) { throw "apksigner verification failed ($LASTEXITCODE): $certificate" }
+    Write-Host $certificate.Trim()
+    if ($ExpectedCertificateSha256) {
+        $actual = [regex]::Match($certificate, '(?im)^Signer #1 certificate SHA-256 digest:\s*([0-9a-f:]+)\s*$').Groups[1].Value.Replace(':', '').ToLowerInvariant()
+        $expected = $ExpectedCertificateSha256.Replace(':', '').ToLowerInvariant()
+        if (-not $actual -or $actual -ne $expected) {
+            throw "APK certificate SHA-256 mismatch: expected $expected, got $actual"
+        }
+    }
+} elseif ($ExpectedCertificateSha256) {
+    throw 'apksigner is required when an expected certificate fingerprint is supplied.'
 } else {
     Write-Warning 'apksigner not found under ANDROID_HOME/ANDROID_SDK_ROOT; signing certificate was not reported.'
 }

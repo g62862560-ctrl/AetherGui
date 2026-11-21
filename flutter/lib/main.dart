@@ -575,11 +575,18 @@ class _HomePageState extends State<HomePage> {
         'Proxy only: HTTP 127.0.0.1:${Aether.httpPort}, SOCKS5 127.0.0.1:${Aether.socksPort}.',
         seaGreen,
       );
-    } else if (vpnStarted || await Aether.vpnStart()) {
+    } else if (vpnStarted && await Aether.vpnActive()) {
       _step('VPN on: all apps go through aether.', seaGreen);
     } else {
-      _logError('VPN permission denied: proxy only.');
-      _addStep('VPN permission denied: proxy only.', red);
+      _logError('VPN did not establish; stopping to avoid an unprotected session.');
+      _addStep('VPN did not establish; connection stopped.', red);
+      _connection.transition(
+        ConnectionPhase.error,
+        message: 'Android did not confirm ownership of the VPN tunnel.',
+        reconnectAvailable: true,
+      );
+      await _killProcessAndWait();
+      return;
     }
     if (!realDelayTest) {
       _setDelay('not tested');

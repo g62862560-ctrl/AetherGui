@@ -310,9 +310,18 @@ class Aether {
     dir = dirs[1];
   }
 
-  // Full-device VPN (tun2socks onto the SOCKS port); false if the user declined the VPN prompt.
-  static Future<bool> vpnStart() async =>
-      await _ch.invokeMethod<bool>('vpnStart', socksPort) ?? false;
+  // Full-device VPN (tun2socks onto the SOCKS port). Native returns true only
+  // after the service owns a TUN and tun2socks has started, never on dispatch alone.
+  static Future<bool> vpnStart() async {
+    try {
+      return await _ch
+              .invokeMethod<bool>('vpnStart', socksPort)
+              .timeout(const Duration(seconds: 15)) ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
   static Future<bool> vpnStop() async =>
       await _ch.invokeMethod<bool>('vpnStop') ?? false;
   // Proxy mode: the same service without a tun, only so Android keeps the app alive in the background.

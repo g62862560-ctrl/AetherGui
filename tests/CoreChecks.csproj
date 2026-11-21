@@ -16,6 +16,7 @@
     <Compile Include="..\TunMode.cs" Link="TunMode.cs" />
     <Compile Include="..\MixedProxy.cs" Link="MixedProxy.cs" />
     <Compile Include="..\Psiphon.cs" Link="Psiphon.cs" />
+    <Compile Include="..\ProcessOwnership.cs" Link="ProcessOwnership.cs" />
     <EmbeddedResource Include="..\flutter\assets\psiphon.png" LogicalName="psiphon.png" />
     <None Include="..\aether.exe" Link="aether.exe" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

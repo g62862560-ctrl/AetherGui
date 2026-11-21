@@ -8,11 +8,11 @@ static class Program
     static void Main(string[] args)
     {
         // Watchdog mode: a tiny second copy of this exe that outlives a crashed/killed GUI and undoes its changes.
-        if (args.Length == 2 && args[0] == "--watchdog")
+        if (args.Length is 2 or 3 && args[0] == "--watchdog")
         {
             try { Process.GetProcessById(int.Parse(args[1])).WaitForExit(); } catch { }
-            foreach (var p in Process.GetProcessesByName("aether"))
-                try { p.Kill(true); } catch { }
+            if (args.Length == 3 && int.TryParse(args[2], out var corePid))
+                KillOwnedCore(corePid);
             Psiphon.Kill();
             TunMode.Cleanup();
             SystemProxy.Disable();
@@ -46,5 +46,18 @@ static class Program
         {
             mutex.Dispose();
         }
+    }
+
+    private static void KillOwnedCore(int pid)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            var expected = Path.Combine(AppContext.BaseDirectory, "aether.exe");
+            if (!ProcessOwnership.MatchesExecutable(process, expected)) return;
+            process.Kill(true);
+            process.WaitForExit(2000);
+        }
+        catch { }
     }
 }

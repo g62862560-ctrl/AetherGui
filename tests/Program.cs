@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using AetherGui;
 
 static class Checks
@@ -23,6 +24,12 @@ static class Checks
         Check(!string.IsNullOrWhiteSpace(TunMode.PowerShell(
             "Get-NetRoute -AddressFamily IPv4 -PolicyStore ActiveStore -ErrorAction Stop | Select-Object -ExpandProperty DestinationPrefix")),
             "TUN route query reads the live Windows route table");
+        using (var current = Process.GetCurrentProcess())
+        {
+            Check(ProcessOwnership.MatchesExecutable(current, current.MainModule!.FileName), "Watchdog accepts an exact executable path");
+            Check(!ProcessOwnership.MatchesExecutable(current, Path.Combine(Path.GetTempPath(), "aether.exe")),
+                "Watchdog rejects an unrelated executable path");
+        }
 
         var options = CoreOptions.Parse("[\"--tor-bridge\",\"obfs4 1.2.3.4:443 cert=abc iat-mode=0\"]",
             "{\"AETHER_SCAN\":\"balanced\"}", 600);

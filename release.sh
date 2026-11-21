@@ -6,6 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 v=${1:?usage: ./release.sh X.Y.Z}
 gh=$(command -v gh || echo "/c/Program Files/GitHub CLI/gh.exe")
+release_cert_sha256=94a974070556d47e18dfcb8a465fd8442a3e6a1750258a38856d4b306114f273
 fail() { echo "error: $*" >&2; exit 1; }
 
 [[ $v =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "version must look like 1.0.1"
@@ -32,7 +33,7 @@ cp -r publish/AetherGui.exe publish/aether.exe publish/pt publish/tun2socks publ
 mkdir -p "$out/reports"
 for f in flutter/build/app/outputs/flutter-apk/app-*-release.apk; do # one APK per CPU: arm64-v8a, armeabi-v7a, x86_64
   a=${f##*/app-}; apk="$out/AetherGui-$v-android-${a%-release.apk}.apk"; cp "$f" "$apk"
-  powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File flutter/tool/report-apk.ps1 -ApkPath "$apk" | tee -a "$out/reports/apk-report.txt"
+  powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File flutter/tool/report-apk.ps1 -ApkPath "$apk" -ExpectedCertificateSha256 "$release_cert_sha256" | tee -a "$out/reports/apk-report.txt"
 done
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File flutter/tool/generate-sbom.ps1 -OutputPath "$out/reports/sbom.cdx.json"
 

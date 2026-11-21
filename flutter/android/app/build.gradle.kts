@@ -40,9 +40,16 @@ android {
         }
     }
 
-    // Release key from android/key.properties (gitignored); without it release falls back to the debug key.
-    val keyProps = rootProject.file("key.properties").takeIf { it.exists() }
+    // Official release builds fail closed unless the configured release key exists.
+    val keyPropsFile = rootProject.file("key.properties")
+    val keyProps = keyPropsFile.takeIf { it.exists() }
         ?.let { f -> Properties().apply { f.inputStream().use { load(it) } } }
+    val releaseRequested = gradle.startParameter.taskNames.any {
+        it.contains("Release", ignoreCase = true)
+    }
+    if (releaseRequested && keyProps == null) {
+        throw GradleException("Release signing requires android/key.properties; debug-key fallback is forbidden.")
+    }
     signingConfigs {
         if (keyProps != null) create("release") {
             storeFile = rootProject.file(keyProps.getProperty("storeFile")) // relative to android/
@@ -54,7 +61,7 @@ android {
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName(if (keyProps != null) "release" else "debug")
+            if (keyProps != null) signingConfig = signingConfigs.getByName("release")
         }
     }
 }

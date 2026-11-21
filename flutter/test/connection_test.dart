@@ -3,9 +3,12 @@ import 'dart:io';
 
 import 'package:aether_gui/aether.dart';
 import 'package:aether_gui/connection.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   test(
     'stale pid metadata is removed without killing an unrelated process',
     () {
@@ -18,6 +21,24 @@ void main() {
       expect(file.existsSync(), isFalse);
     },
   );
+
+  test('vpn start succeeds only when the native call acknowledges ownership', () async {
+    const channel = MethodChannel('aether');
+    final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      expect(call.method, 'vpnStart');
+      expect(call.arguments, Aether.socksPort);
+      return true;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    expect(await Aether.vpnStart(), isTrue);
+
+    messenger.setMockMethodCallHandler(
+      channel,
+      (_) async => throw PlatformException(code: 'vpn_start', message: 'failed'),
+    );
+    expect(await Aether.vpnStart(), isFalse);
+  });
 
   test('native state validates payload', () {
     expect(NativeVpnState.from(null), isNull);
