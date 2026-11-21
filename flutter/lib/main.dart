@@ -260,7 +260,7 @@ class _HomePageState extends State<HomePage> {
     if (!mounted) return;
     switch (state.state) {
       case 'starting':
-        _connection.transition(ConnectionPhase.starting, clearMessage: true);
+        _connection.transition(ConnectionPhase.startingVpn, clearMessage: true);
       case 'connected':
         _connection.transition(
           ConnectionPhase.connected,
@@ -303,7 +303,7 @@ class _HomePageState extends State<HomePage> {
       if (_ct != null) return;
       final ct = _ct = Cancel();
       _connection.transition(
-        ConnectionPhase.starting,
+        ConnectionPhase.preparing,
         clearMessage: true,
         reconnectAvailable: false,
       );
@@ -312,8 +312,11 @@ class _HomePageState extends State<HomePage> {
         _steps.clear();
         _exitInfo = null;
       });
-      await _run(ct);
-      _ct = null;
+      try {
+        await _run(ct);
+      } finally {
+        _ct = null;
+      }
       _connection.transition(ConnectionPhase.disconnected);
       if (mounted) setState(() {});
     });
@@ -381,7 +384,8 @@ class _HomePageState extends State<HomePage> {
           if (_vpn) {
             await Aether.vpnStop();
             for (var i = 0; i < 10 && await Aether.vpnActive(); i++) {
-              await Future.delayed(const Duration(milliseconds: 100));
+              ct.check();
+              await ct.delay(100);
             }
           }
           if (chosen >= 0)
@@ -442,16 +446,20 @@ class _HomePageState extends State<HomePage> {
       }
     }
 
+    _connection.transition(ConnectionPhase.preparing);
     // Let an old aether process release its ports before starting a new one.
     Aether.killStale();
     for (var i = 0; i < 25; i++) {
+      ct.check();
       if (await Aether.portFree(Aether.socksPort) &&
           await Aether.portFree(Aether.httpPort)) {
         break;
       }
-      await Future.delayed(const Duration(milliseconds: 200));
+      await ct.delay(200);
     }
 
+    ct.check();
+    _connection.transition(ConnectionPhase.startingCore);
     final proc = _process = await Aether.start(
       p,
       coreLog,
@@ -471,14 +479,22 @@ class _HomePageState extends State<HomePage> {
       return;
     }
     _step('Core started, waiting for local proxy...');
+    _connection.transition(ConnectionPhase.waitingForProxy);
 
-    // Take over the system VPN before testing, so a broken VPN does not block Aether.
+    // Never establish the VPN before the owned local proxy is accepting.
+    var proxyReady = false;
     var vpnStarted = false;
     for (var i = 0; i < 25; i++) {
-      if (await Aether.portOpen()) break;
-      await Future.delayed(const Duration(milliseconds: 200));
+      ct.check();
+      if (await Aether.portOpen()) {
+        proxyReady = true;
+        break;
+      }
+      await ct.delay(200);
     }
-    if (_vpn) {
+    ct.check();
+    if (_vpn && proxyReady) {
+      _connection.transition(ConnectionPhase.startingVpn);
       if (await Aether.vpnActive()) {
         vpnStarted = true;
       } else {
@@ -488,6 +504,11 @@ class _HomePageState extends State<HomePage> {
 
     final took = Stopwatch()..start();
     final realDelayTest = _realDelayTest;
+    _connection.transition(
+      proxyReady
+          ? ConnectionPhase.testingConnectivity
+          : ConnectionPhase.waitingForProxy,
+    );
     var (connected, ms) = await Aether.waitConnected(
       proc,
       _coreOptions.isConfigured ? _coreOptions.startupSeconds : startupSeconds,
@@ -508,8 +529,12 @@ class _HomePageState extends State<HomePage> {
       stat.ok++;
       stat.totalMs += took.elapsedMilliseconds;
       stat.lastOk = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      stat.consecutiveFailures = 0;
+      stat.lastFailure = 0;
     } else {
       stat.fail++;
+      stat.consecutiveFailures++;
+      stat.lastFailure = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     }
     _order = Aether.rerank(
       _autoIndexes(_order),
@@ -531,6 +556,7 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
+    _connection.transition(ConnectionPhase.connected);
     _setStatus('Connected: ${p.name}', seaGreen);
     if (mounted) setState(() => _error = null);
     _step(

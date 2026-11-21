@@ -29,8 +29,26 @@ typedef ExitSink = void Function(ExitInfo exit);
 
 // How one protocol has done on this device: connects that worked, tries that failed, speed and recency.
 class ProtocolStat {
-  ProtocolStat({this.ok = 0, this.fail = 0, this.totalMs = 0, this.lastOk = 0});
-  int ok, fail, totalMs, lastOk; // lastOk: epoch seconds, 0 = never
+  ProtocolStat({
+    this.ok = 0,
+    this.fail = 0,
+    this.totalMs = 0,
+    this.lastOk = 0,
+    this.consecutiveFailures = 0,
+    this.lastFailure = 0,
+  });
+  int ok, fail, totalMs, lastOk;
+  int consecutiveFailures,
+      lastFailure; // timestamps are epoch seconds, 0 = never
+
+  Duration cooldown({DateTime? now}) {
+    if (consecutiveFailures == 0 || lastFailure == 0) return Duration.zero;
+    final exponent = (consecutiveFailures - 1).clamp(0, 5);
+    final seconds = 5 * (1 << exponent); // 5s, 10s ... capped at 160s.
+    final elapsed =
+        (now ?? DateTime.now()).millisecondsSinceEpoch ~/ 1000 - lastFailure;
+    return Duration(seconds: (seconds - elapsed).clamp(0, seconds));
+  }
 
   int get tries => ok + fail;
   int get avgMs => ok == 0 ? 0 : totalMs ~/ ok;
@@ -420,7 +438,7 @@ class Aether {
   // Saved as "0:5:2:21000:1762850000;..." = preset:ok:fail:totalOkMs:lastOkEpochSeconds.
   static Map<int, ProtocolStat> parseStats(String? s) => {
     for (final m in RegExp(
-      r'(\d+):(\d+):(\d+):(\d+):(\d+)',
+      r'(\d+):(\d+):(\d+):(\d+):(\d+)(?::(\d+):(\d+))?',
     ).allMatches(s ?? ''))
       if (int.parse(m.group(1)!) < presets.length)
         int.parse(m.group(1)!): ProtocolStat(
@@ -428,38 +446,48 @@ class Aether {
           fail: int.parse(m.group(3)!),
           totalMs: int.parse(m.group(4)!),
           lastOk: int.parse(m.group(5)!),
+          consecutiveFailures: int.parse(m.group(6) ?? '0'),
+          lastFailure: int.parse(m.group(7) ?? '0'),
         ),
   };
 
-  // Worked first (best success rate, then fastest), untried next, only-failed last; ties keep their order.
-  static List<int> sortByStats(List<int> order, Map<int, ProtocolStat> stats) {
-    int group(int i) {
+  // Successful and recently proven routes first; cooling-down failures last.
+  // Bayesian smoothing avoids one lucky attempt outranking established routes.
+  static List<int> sortByStats(
+    List<int> order,
+    Map<int, ProtocolStat> stats, {
+    DateTime? now,
+  }) {
+    final clock = now ?? DateTime.now();
+    final nowSeconds = clock.millisecondsSinceEpoch ~/ 1000;
+    final pos = {for (final (n, i) in order.indexed) i: n};
+    double score(int i) {
       final s = stats[i];
-      if (s == null || s.tries == 0) return 1;
-      return s.ok > 0 ? 0 : 2;
+      if (s == null || s.tries == 0) return 0.5;
+      final success = (s.ok + 1) / (s.tries + 2);
+      final recency = s.lastOk == 0
+          ? 0.0
+          : 1 / (1 + ((nowSeconds - s.lastOk).clamp(0, 1 << 30) / 86400));
+      final speed = s.avgMs == 0 ? 0.0 : 1 / (1 + s.avgMs / 3000);
+      return success * 0.65 + recency * 0.25 + speed * 0.10;
     }
 
-    final pos = {for (final (n, i) in order.indexed) i: n};
     return [...order]..sort((a, b) {
-      final g = group(a).compareTo(group(b));
-      if (g != 0) return g;
-      if (group(a) == 0) {
-        final sa = stats[a]!, sb = stats[b]!;
-        final r = (sb.ok * sa.tries).compareTo(
-          sa.ok * sb.tries,
-        ); // higher rate first
-        if (r != 0) return r;
-        final v = sa.avgMs.compareTo(sb.avgMs);
-        if (v != 0) return v;
-      }
-      return pos[a]!.compareTo(pos[b]!);
+      final aCooling =
+          (stats[a]?.cooldown(now: clock) ?? Duration.zero) > Duration.zero;
+      final bCooling =
+          (stats[b]?.cooldown(now: clock) ?? Duration.zero) > Duration.zero;
+      if (aCooling != bCooling) return aCooling ? 1 : -1;
+      final byScore = score(b).compareTo(score(a));
+      return byScore != 0 ? byScore : pos[a]!.compareTo(pos[b]!);
     });
   }
 
   static String formatStats(Map<int, ProtocolStat> stats) => stats.entries
       .map(
         (e) =>
-            '${e.key}:${e.value.ok}:${e.value.fail}:${e.value.totalMs}:${e.value.lastOk}',
+            '${e.key}:${e.value.ok}:${e.value.fail}:${e.value.totalMs}:'
+            '${e.value.lastOk}:${e.value.consecutiveFailures}:${e.value.lastFailure}',
       )
       .join(';');
 

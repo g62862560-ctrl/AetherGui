@@ -55,13 +55,24 @@ class MainActivity : FlutterActivity() {
                     result.success(null)
                 }
                 "vpnStart" -> {
-                    val port = call.arguments as Int
-                    val consent = VpnService.prepare(this)
-                    if (consent == null) result.success(startVpn(port))
-                    else {
-                        pending?.second?.success(false)
-                        pending = port to result
-                        startActivityForResult(consent, VPN_CONSENT)
+                    val port = call.arguments as? Int
+                    if (port == null || port !in 1..65535) {
+                        result.error("invalid_port", "SOCKS port must be between 1 and 65535", null)
+                    } else if (AetherVpn.isTunnelOwned()) {
+                        result.success(true)
+                    } else {
+                        val consent = VpnService.prepare(this)
+                        if (consent == null) result.success(startVpn(port))
+                        else {
+                            pending?.second?.success(false)
+                            pending = port to result
+                            try {
+                                startActivityForResult(consent, VPN_CONSENT)
+                            } catch (e: Exception) {
+                                pending = null
+                                result.error("vpn_consent", e.message ?: "Unable to request VPN consent", null)
+                            }
+                        }
                     }
                 }
                 "keepAlive" -> result.success(dispatchService(Intent(this, AetherVpn::class.java)

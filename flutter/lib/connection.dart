@@ -6,8 +6,13 @@ import 'package:flutter/foundation.dart';
 /// button colors or process fields.
 enum ConnectionPhase {
   disconnected,
-  starting,
+  preparing,
+  startingCore,
+  waitingForProxy,
+  startingVpn,
+  testingConnectivity,
   connected,
+  reconnectBackoff,
   stopping,
   recovering,
   error,
@@ -26,10 +31,7 @@ class ConnectionStateModel {
   final bool reconnectAvailable;
 
   bool get busy =>
-      phase == ConnectionPhase.starting ||
-      phase == ConnectionPhase.connected ||
-      phase == ConnectionPhase.stopping ||
-      phase == ConnectionPhase.recovering;
+      phase != ConnectionPhase.disconnected && phase != ConnectionPhase.error;
 
   ConnectionStateModel copyWith({
     ConnectionPhase? phase,

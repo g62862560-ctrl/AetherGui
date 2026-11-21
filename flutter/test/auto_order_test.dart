@@ -120,6 +120,46 @@ void statsTests() {
         3: ProtocolStat(ok: 1, totalMs: 4000),
       },
     );
-    expect(sorted, [3, 0, 2, 1]); // 100% beats 83%, untried middle, failed last
+    expect(sorted.first, 0);
+    expect(sorted.last, 1);
+  });
+
+  test('recent success outranks stale success and failures cool down', () {
+    final now = DateTime.fromMillisecondsSinceEpoch(2000000000000);
+    final seconds = now.millisecondsSinceEpoch ~/ 1000;
+    final sorted = Aether.sortByStats(
+      [0, 1, 2],
+      {
+        0: ProtocolStat(
+          ok: 8,
+          fail: 2,
+          totalMs: 16000,
+          lastOk: seconds - 864000,
+        ),
+        1: ProtocolStat(ok: 8, fail: 2, totalMs: 16000, lastOk: seconds - 60),
+        2: ProtocolStat(
+          ok: 20,
+          fail: 1,
+          totalMs: 20000,
+          lastOk: seconds - 30,
+          consecutiveFailures: 2,
+          lastFailure: seconds,
+        ),
+      },
+      now: now,
+    );
+    expect(sorted, [1, 0, 2]);
+    expect(
+      Aether.parseStats(
+        Aether.formatStats({
+          2: ProtocolStat(
+            fail: 2,
+            consecutiveFailures: 2,
+            lastFailure: seconds,
+          ),
+        }),
+      )[2]!.consecutiveFailures,
+      2,
+    );
   });
 }

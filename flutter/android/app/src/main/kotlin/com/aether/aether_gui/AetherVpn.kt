@@ -18,24 +18,32 @@ import java.util.concurrent.atomic.AtomicBoolean
 class AetherVpn : VpnService() {
     private var tun: ParcelFileDescriptor? = null
 
+    @Synchronized
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             STOP, DISCONNECT -> {
                 stop("disconnected", reason = "requested")
-                stopSelf()
+                stopSelfResult(startId)
                 return START_NOT_STICKY
             }
             KEEP_ALIVE -> {
-                stop("disconnected")
-                startForeground(NOTIFICATION_ID, notification(false))
+                if (tun == null && !tunnelOwned.get()) {
+                    startForeground(NOTIFICATION_ID, notification(false))
+                }
                 return START_NOT_STICKY
             }
         }
 
-        stop(null)
+        // A repeated start for the same live service is idempotent. Replacing an
+        // active native tunnel in-place can make an older stop tear down the new FD.
+        if (tun != null || tunnelOwned.get()) {
+            publishState("connected", owned = true)
+            return START_NOT_STICKY
+        }
         publishState("starting", owned = false)
         startForeground(NOTIFICATION_ID, notification(true))
         val port = intent?.getIntExtra(EXTRA_PORT, DEFAULT_PORT) ?: DEFAULT_PORT
+        if (port !in 1..65535) return failStart("Invalid SOCKS port")
         try {
             val t = Builder()
                 .setSession("Aether VPN")
@@ -105,6 +113,7 @@ class AetherVpn : VpnService() {
         return START_NOT_STICKY
     }
 
+    @Synchronized
     override fun onRevoke() {
         stop(null)
         publishState("disconnected", owned = false, reason = "revoked")
@@ -112,6 +121,7 @@ class AetherVpn : VpnService() {
         super.onRevoke()
     }
 
+    @Synchronized
     override fun onDestroy() {
         val wasOwned = tunnelOwned.get()
         stop(null)
@@ -120,19 +130,22 @@ class AetherVpn : VpnService() {
     }
 
     private fun stop(finalState: String?, reason: String? = null) {
+        // Clear Java-side ownership before native teardown so concurrent queries
+        // never report a tunnel whose close has already begun.
         val descriptor = tun
-        val wasRunning = descriptor != null || tunnelOwned.get()
-        if (wasRunning) publishState("stopping", owned = tunnelOwned.get())
+        tun = null
+        val wasOwned = tunnelOwned.getAndSet(false)
+        val wasRunning = descriptor != null || wasOwned
+        if (wasRunning) publishState("stopping", owned = false)
         if (descriptor != null) {
             try {
                 if (!TProxyStopService()) Log.w(TAG, "tun2socks reported stop failure")
             } catch (e: Exception) {
                 Log.w(TAG, "tun2socks stop failed", e)
+            } finally {
+                try { descriptor.close() } catch (e: Exception) { Log.w(TAG, "tun close failed", e) }
             }
-            try { descriptor.close() } catch (e: Exception) { Log.w(TAG, "tun close failed", e) }
         }
-        tun = null
-        tunnelOwned.set(false)
         if (finalState != null) publishState(finalState, owned = false, reason = reason)
     }
 
