@@ -960,16 +960,19 @@ class _HomePageState extends State<HomePage> {
           if (notes.isNotEmpty) {
             await showDialog<void>(
               context: context,
-              builder: (context) => AlertDialog(
-                title: Text("What's new in Aether ${current.join('.')}"),
-                scrollable: true,
-                content: Text(notes),
-                actions: [
-                  FilledButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Done'),
-                  ),
-                ],
+              builder: (context) => Directionality(
+                textDirection: TextDirection.rtl,
+                child: AlertDialog(
+                  title: Text('تازه‌های نسخهٔ ${current.join('.')}'),
+                  scrollable: true,
+                  content: Text(notes),
+                  actions: [
+                    FilledButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('باشه'),
+                    ),
+                  ],
+                ),
               ),
             );
           }

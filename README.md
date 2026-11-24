@@ -22,7 +22,7 @@
 
 ## Release process
 
-Before releasing, add a `## X.Y.Z` section with short, user-facing changes to `flutter/assets/release_notes.txt`. Both apps bundle these notes and show them on the first launch after upgrading.
+Before releasing, add a `## X.Y.Z` section with short, user-facing changes in Persian to `flutter/assets/release_notes.txt`. Both apps bundle these notes and show them on the first launch after upgrading.
 
 All releases must be created with `./release.sh X.Y.Z`. On Windows, run `release.bat X.Y.Z`, which delegates to the same script. Do not publish releases manually; the script is responsible for tests, Windows and Android builds, reports, version commits, tags, pushes, and GitHub release assets.
 

@@ -441,7 +441,8 @@ public partial class Form1 : Form
         var version = Aether.AppVersion;
         var notes = ReleaseNotes.ForVersion(version);
         if (notes.Length > 0)
-            MessageBox.Show(this, notes, $"What's new in AetherGui {version}", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, notes, $"تازه‌های نسخهٔ {version}", MessageBoxButtons.OK, MessageBoxIcon.Information,
+                MessageBoxDefaultButton.Button1, MessageBoxOptions.RightAlign | MessageBoxOptions.RtlReading);
     }
 
     // Updates are offered in a dialog, at startup too, so they are seen with the log hidden; only the

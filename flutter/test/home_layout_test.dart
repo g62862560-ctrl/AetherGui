@@ -31,15 +31,16 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    final title = find.text("What's new in Aether 1.0.29");
+    final title = find.text('تازه‌های نسخهٔ 1.0.29');
     await launch();
     expect(title, findsNothing);
     await tester.pumpWidget(const SizedBox.shrink());
     settings.writeAsStringSync('LastSeenAppVersion=1.0.28\nRealDelayTest=1\n');
     await launch();
     expect(title, findsOneWidget);
-    expect(find.textContaining('beside Auto try'), findsOneWidget);
-    await tester.tap(find.text('Done'));
+    expect(find.textContaining('آزمایش تأخیر واقعی'), findsOneWidget);
+    expect(Directionality.of(tester.element(title)), TextDirection.rtl);
+    await tester.tap(find.text('باشه'));
     await tester.pumpAndSettle();
     expect(settings.readAsStringSync(), contains('LastSeenAppVersion=1.0.29'));
     expect(

@@ -393,7 +393,7 @@ static class Checks
         Check(delayUrl.Enabled && !All(settings).OfType<CheckBox>().Any(c => c.AccessibleName == "Real delay test"),
             "Settings keeps the editable URL but not the delay toggle");
         var release = new Version(1, 0, 29);
-        Check(ReleaseNotes.ForVersion(release).Contains("beside Auto try") && ReleaseNotes.ForVersion(new Version(1, 0, 0)).Length == 0,
+        Check(ReleaseNotes.ForVersion(release).Contains("آزمایش تأخیر واقعی", StringComparison.Ordinal) && ReleaseNotes.ForVersion(new Version(1, 0, 0)).Length == 0,
             "Bundled notes match the installed version only");
         Check(ReleaseNotes.ShouldShow(release, "1.0.28", true) && ReleaseNotes.ShouldShow(release, null, true)
             && !ReleaseNotes.ShouldShow(release, null, false) && !ReleaseNotes.ShouldShow(release, "1.0.29", true)
