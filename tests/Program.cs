@@ -360,6 +360,8 @@ static class Checks
             "Connecting colors start, step and wrap around smoothly");
         Check(Aether.ValidTestUrl("https://www.cloudflare.com/cdn-cgi/trace") is null && Aether.ValidTestUrl("ftp://x") is not null
             && Aether.ValidTestUrl("gstatic.com") is not null, "Delay test URL must be absolute http(s)");
+        Check(!Aether.DefaultRealDelayTest && !Aether.ParseRealDelayTest(null) && !Aether.ParseRealDelayTest(0)
+            && !Aether.ParseRealDelayTest("1") && Aether.ParseRealDelayTest(1), "Real delay test is disabled by default");
         {
             // The Auto order list must really draw the stats: a "good" protocol shows its green verdict.
             using var withStats = new CoreSettingsForm(new(), null, null, stats);
@@ -386,6 +388,8 @@ static class Checks
         using var settings = new CoreSettingsForm(new());
         var delayToggle = All(settings).OfType<CheckBox>().Single(c => c.AccessibleName == "Real delay test");
         var delayUrl = All(settings).OfType<ComboBox>().Single(c => c.AccessibleName == "Delay test URL");
+        All(settings).OfType<Button>().Single(b => b.Text == "Reset fields").PerformClick();
+        Check(!delayToggle.Checked, "Reset fields disables the real delay test");
         delayToggle.Checked = true; delayToggle.Checked = false;
         Check(!delayUrl.Enabled, "Disabling real delay test disables its URL");
         delayToggle.Checked = true;

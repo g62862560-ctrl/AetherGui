@@ -133,6 +133,16 @@ class Aether {
     'http://www.msftconnecttest.com/connecttest.txt',
   ];
   static var testUrl = defaultTestUrl;
+  static const defaultRealDelayTest = false;
+
+  // Missing or malformed settings keep the safe default; only an explicit 1 enables the test.
+  static bool parseRealDelayTest(String settings) {
+    final value = RegExp(
+      r'^RealDelayTest=([01])$',
+      multiLine: true,
+    ).firstMatch(settings)?.group(1);
+    return value == null ? defaultRealDelayTest : value == '1';
+  }
 
   // Why a typed delay-test URL can't be used, or null if it can.
   static String? testUrlError(String text) {
@@ -705,7 +715,7 @@ class Aether {
     int startupSecs,
     Cancel ct, [
     Log? step,
-    bool realDelayTest = true,
+    bool realDelayTest = defaultRealDelayTest,
   ]) async {
     final sw = Stopwatch()..start();
     int? upAt;

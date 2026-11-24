@@ -103,7 +103,7 @@ class _HomePageState extends State<HomePage> {
   String _scan = 'turbo'; // AETHER_SCAN: turbo or balanced
   bool _vpn = true; // full-device VPN (tun); false = only serve the local proxy
   bool _showActivity = true;
-  bool _realDelayTest = true;
+  bool _realDelayTest = Aether.defaultRealDelayTest;
   String _status = 'Disconnected';
   Color _statusColor = red;
   String _delay = ''; // e.g. '24 ms', shown beside the route while connected
@@ -161,7 +161,7 @@ class _HomePageState extends State<HomePage> {
       if (s.contains('Scan=balanced')) _scan = 'balanced';
       _vpn = !s.contains('Mode=proxy');
       _showActivity = !s.contains('ShowActivity=0');
-      _realDelayTest = !s.contains('RealDelayTest=0');
+      _realDelayTest = Aether.parseRealDelayTest(s);
       final http = RegExp(r'HttpPort=(\d+)').firstMatch(s)?.group(1) ?? '';
       final socks = RegExp(r'SocksPort=(\d+)').firstMatch(s)?.group(1) ?? '';
       if (Aether.portError(http, int.tryParse(socks) ?? 0) == null &&

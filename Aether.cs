@@ -84,12 +84,22 @@ static class Aether
         }
     }
 
+    public const bool DefaultRealDelayTest = false;
+
+    // Missing or malformed values keep the safe default; only an explicit 1 enables the test.
+    public static bool ParseRealDelayTest(object? value) => value switch
+    {
+        1 => true,
+        0 => false,
+        _ => DefaultRealDelayTest,
+    };
+
     public static bool RealDelayTest
     {
         get
         {
             using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(PortsKey);
-            return key?.GetValue("RealDelayTest") is not 0;
+            return ParseRealDelayTest(key?.GetValue("RealDelayTest"));
         }
         set
         {
@@ -462,7 +472,7 @@ static class Aether
     // Waits for the proxy and, unless disabled, a passing internet test. Gives up once the startup budget is spent
     // and the proxy has been up for ConnectTimeoutMs without passing (tor opens its port long before it can carry traffic).
     public static async Task<(bool Connected, int? DelayMs)> WaitConnectedAsync(
-        Process proc, int startupSecs, CancellationToken ct, bool realDelayTest = true)
+        Process proc, int startupSecs, CancellationToken ct, bool realDelayTest = DefaultRealDelayTest)
     {
         var sw = Stopwatch.StartNew();
         long? upAt = null;

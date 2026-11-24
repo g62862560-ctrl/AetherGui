@@ -25,6 +25,14 @@ void main() {
     expect(Aether.testUrlError(''), isNotNull);
   });
 
+  test('real delay test is disabled unless settings explicitly enable it', () {
+    expect(Aether.defaultRealDelayTest, isFalse);
+    expect(Aether.parseRealDelayTest(''), isFalse);
+    expect(Aether.parseRealDelayTest('ShowActivity=1\nMode=vpn'), isFalse);
+    expect(Aether.parseRealDelayTest('RealDelayTest=0'), isFalse);
+    expect(Aether.parseRealDelayTest('RealDelayTest=1'), isTrue);
+  });
+
   test('disabled real delay test only requires the local proxy', () async {
     final dir = Directory.systemTemp.createTempSync('aether-delay-test-');
     final script = File('${dir.path}/wait.dart')

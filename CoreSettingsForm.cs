@@ -158,7 +158,7 @@ sealed class CoreSettingsForm : Form
         reset.Click += (_, _) =>
         {
             _psiphonRegion.SelectedIndex = 0; _arguments.Text = "[]"; _environment.Text = "{}"; _timeout.Value = 300;
-            _port.Value = Aether.DefaultProxyPort; _realDelayTest.Checked = true; _testUrl.Text = Aether.DefaultTestUrl; ResetOrder();
+            _port.Value = Aether.DefaultProxyPort; _realDelayTest.Checked = Aether.DefaultRealDelayTest; _testUrl.Text = Aether.DefaultTestUrl; ResetOrder();
         };
         buttons.Controls.AddRange([save, reset, cancel]);
         settings.Controls.Add(layout); tabs.TabPages.AddRange([settings, orderTab, helpTab, psiphonTab]); Controls.AddRange([tabs, buttons]);
