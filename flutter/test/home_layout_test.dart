@@ -7,6 +7,52 @@ import 'package:aether_gui/aether.dart';
 import 'package:aether_gui/main.dart';
 
 void main() {
+  testWidgets('bundled release notes appear once after an upgrade', (
+    tester,
+  ) async {
+    final dir = Directory.systemTemp.createTempSync('aether-upgrade-');
+    Aether.dir = dir.path;
+    Aether.exe = '${dir.path}/missing-core';
+    final settings = File('${dir.path}/settings.txt');
+    final messenger = tester.binding.defaultBinaryMessenger;
+    const channel = MethodChannel('aether');
+    messenger.setMockMethodCallHandler(
+      channel,
+      (call) async => call.method == 'appVersion' ? '1.0.29' : null,
+    );
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(channel, null);
+      dir.deleteSync(recursive: true);
+    });
+    Future<void> launch() async {
+      await tester.pumpWidget(
+        MaterialApp(theme: Palette.theme, home: const HomePage()),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    final title = find.text("What's new in Aether 1.0.29");
+    await launch();
+    expect(title, findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+    settings.writeAsStringSync('LastSeenAppVersion=1.0.28\nRealDelayTest=1\n');
+    await launch();
+    expect(title, findsOneWidget);
+    expect(find.textContaining('beside Auto try'), findsOneWidget);
+    await tester.tap(find.text('Done'));
+    await tester.pumpAndSettle();
+    expect(settings.readAsStringSync(), contains('LastSeenAppVersion=1.0.29'));
+    expect(
+      tester
+          .widget<CheckboxListTile>(find.byKey(const Key('realDelayTest')))
+          .value,
+      isTrue,
+    );
+    await tester.pumpWidget(const SizedBox.shrink());
+    await launch();
+    expect(title, findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
   testWidgets(
     'VPN revocation stops the connection and explains what happened',
     (tester) async {
@@ -154,6 +200,19 @@ void main() {
     await tester.pumpAndSettle();
 
     final field = find.byKey(const Key('autoTrySeconds'));
+    final delay = find.byKey(const Key('realDelayTest'));
+    expect(
+      tester.getRect(delay).left,
+      greaterThan(tester.getRect(field).right),
+    );
+    expect(tester.widget<CheckboxListTile>(delay).value, isFalse);
+    await tester.tap(delay);
+    await tester.pumpAndSettle();
+    expect(tester.widget<CheckboxListTile>(delay).value, isTrue);
+    expect(
+      File('${dir.path}/settings.txt').readAsStringSync(),
+      contains('RealDelayTest=1'),
+    );
     expect(
       tester
           .widget<FilledButton>(find.byKey(const Key('nextProtocol')))

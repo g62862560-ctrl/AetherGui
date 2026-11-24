@@ -22,7 +22,13 @@ public partial class Form1 : Form
 
     public Form1()
     {
+        // Read before the constructor can write default settings for a fresh install.
+        using var startupSettings = Registry.CurrentUser.OpenSubKey(SettingsKey);
+        var lastSeenVersion = startupSettings?.GetValue("LastSeenAppVersion") as string;
+        var hadSettings = startupSettings?.GetValue("OrderVersion") is int;
         InitializeComponent();
+        chkRealDelayTest.Checked = Aether.RealDelayTest;
+        chkRealDelayTest.CheckedChanged += (_, _) => Aether.RealDelayTest = chkRealDelayTest.Checked;
         cboScan.Items.AddRange(["Fast: first server that answers", "Balanced: tries a few, keeps the fastest"]);
         var savedProtocol = 0;
         string? savedMenuText = null;
@@ -101,6 +107,11 @@ public partial class Form1 : Form
         };
         Shown += async (_, _) =>
         {
+            var current = Aether.AppVersion;
+            if (ReleaseNotes.ShouldShow(current, lastSeenVersion, hadSettings)) ShowReleaseNotes();
+            if (IsDisposed || Disposing) return;
+            if (Aether.ParseVersion(lastSeenVersion) is not { } previous || current > previous)
+                SaveSetting("LastSeenAppVersion", current.ToString());
             _ = CheckUpdatesAsync(interactive: false);
             // Restarted as admin for TUN: resume the connection the user had running.
             if (TunMode.ElevatedForTun)
@@ -160,14 +171,14 @@ public partial class Form1 : Form
         StartWatchdog();
         btnConnect.Text = "■\nDisconnect";
         btnConnect.AccessibleName = "Disconnect";
-        btnCoreSettings.Enabled = btnReset.Enabled = cboProtocol.Enabled = cboScan.Enabled = numTrySeconds.Enabled = btnUpdates.Enabled = false;
+        btnCoreSettings.Enabled = btnReset.Enabled = cboProtocol.Enabled = cboScan.Enabled = numTrySeconds.Enabled = chkRealDelayTest.Enabled = btnUpdates.Enabled = false;
         btnNextProtocol.Enabled = true;
         btnCoreInput.Enabled = true;
         await RunAsync(_cts.Token);
         _cts.Dispose();
         _cts = null;
         if (IsDisposed) return;
-        btnCoreSettings.Enabled = btnReset.Enabled = cboProtocol.Enabled = cboScan.Enabled = numTrySeconds.Enabled = btnUpdates.Enabled = true;
+        btnCoreSettings.Enabled = btnReset.Enabled = cboProtocol.Enabled = cboScan.Enabled = numTrySeconds.Enabled = chkRealDelayTest.Enabled = btnUpdates.Enabled = true;
         btnNextProtocol.Enabled = false;
         btnCoreInput.Enabled = false;
         btnConnect.Text = "▶\nConnect";
@@ -423,6 +434,14 @@ public partial class Form1 : Form
         cboProtocol.Items.AddRange(_protocolIndexes.Skip(1).Select(i => (object)Aether.Presets[i].Label).ToArray());
         cboProtocol.SelectedIndex = Math.Max(0, Array.IndexOf(_protocolIndexes, selected));
         SaveSetting("MenuOrder", string.Join(",", order));
+    }
+
+    private void ShowReleaseNotes()
+    {
+        var version = Aether.AppVersion;
+        var notes = ReleaseNotes.ForVersion(version);
+        if (notes.Length > 0)
+            MessageBox.Show(this, notes, $"What's new in AetherGui {version}", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     // Updates are offered in a dialog, at startup too, so they are seen with the log hidden; only the

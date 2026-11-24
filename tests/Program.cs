@@ -296,6 +296,9 @@ static class Checks
             Check(All(main).OfType<ComboBox>().Any(c => c.AccessibleName == "Connection protocol"), "The protocol list is on the main window");
             Check(All(main).OfType<CheckBox>().Any(c => c.AccessibleName == "Full-device TUN mode"), "The full-device TUN toggle is on the main window");
             var seconds = All(main).OfType<NumericUpDown>().First(n => n.AccessibleName == "Auto protocol try seconds");
+            var delay = All(main).OfType<CheckBox>().Single(c => c.Text == "Real delay test");
+            Check(delay.Parent == seconds.Parent && delay.Left >= seconds.Right && delay.Checked == Aether.RealDelayTest,
+                "Main delay toggle sits next to Auto try and reflects the saved preference");
             Check(!next.Enabled && seconds.Minimum == 5 && seconds.Maximum == 3600
                 && seconds.Value >= seconds.Minimum && seconds.Value <= seconds.Maximum,
                 "Next protocol starts disabled and Auto try seconds are editable");
@@ -386,14 +389,15 @@ static class Checks
             Check(selector.DropDownStyle == ComboBoxStyle.DropDownList && ((Psiphon.Country)selector.SelectedItem!).Code == "DE", "Country selector restores saved choice");
         }
         using var settings = new CoreSettingsForm(new());
-        var delayToggle = All(settings).OfType<CheckBox>().Single(c => c.AccessibleName == "Real delay test");
         var delayUrl = All(settings).OfType<ComboBox>().Single(c => c.AccessibleName == "Delay test URL");
-        All(settings).OfType<Button>().Single(b => b.Text == "Reset fields").PerformClick();
-        Check(!delayToggle.Checked, "Reset fields disables the real delay test");
-        delayToggle.Checked = true; delayToggle.Checked = false;
-        Check(!delayUrl.Enabled, "Disabling real delay test disables its URL");
-        delayToggle.Checked = true;
-        Check(delayUrl.Enabled, "Enabling real delay test restores its URL");
+        Check(delayUrl.Enabled && !All(settings).OfType<CheckBox>().Any(c => c.AccessibleName == "Real delay test"),
+            "Settings keeps the editable URL but not the delay toggle");
+        var release = new Version(1, 0, 29);
+        Check(ReleaseNotes.ForVersion(release).Contains("beside Auto try") && ReleaseNotes.ForVersion(new Version(1, 0, 0)).Length == 0,
+            "Bundled notes match the installed version only");
+        Check(ReleaseNotes.ShouldShow(release, "1.0.28", true) && ReleaseNotes.ShouldShow(release, null, true)
+            && !ReleaseNotes.ShouldShow(release, null, false) && !ReleaseNotes.ShouldShow(release, "1.0.29", true)
+            && !ReleaseNotes.ShouldShow(release, "1.0.30", true), "Notes appear on upgrades, not on fresh installs, repeat launches or downgrades");
         foreach (var size in new[] { new Size(520, 460), new Size(800, 650), new Size(1200, 800) })
         {
             settings.Size = size; settings.PerformLayout();

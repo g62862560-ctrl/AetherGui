@@ -1,1 +1,2 @@
 *.sh text eol=lf
+flutter/assets/release_notes.txt text eol=lf

@@ -13,6 +13,7 @@ import 'core_settings_page.dart';
 import 'diagnostics.dart';
 import 'exit_info.dart';
 import 'psiphon_countries.dart';
+import 'release_notes.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -107,7 +108,7 @@ class _HomePageState extends State<HomePage> {
   String _status = 'Disconnected';
   Color _statusColor = red;
   String _delay = ''; // e.g. '24 ms', shown beside the route while connected
-  String? _appVersion;
+  String? _appVersion, _lastSeenAppVersion;
   String? _route; // preset being tried or used right now
   ExitInfo? _exitInfo; // latest tunnel exit hop, shown while connected
   String? _error; // latest failure, shown on Home until connected or dismissed
@@ -144,8 +145,15 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     Aether.setVpnHandlers(onRevoked: _vpnRevoked, onState: _vpnStateChanged);
+    var hadSettings = false;
     try {
       final s = _settings.readAsStringSync();
+      hadSettings = s.isNotEmpty;
+      final lastSeen = RegExp(
+        r'^LastSeenAppVersion=(.+)$',
+        multiLine: true,
+      ).firstMatch(s)?.group(1);
+      if (Aether.parseVersion(lastSeen) != null) _lastSeenAppVersion = lastSeen;
       _autoConnect = s.contains('AutoConnect=1');
       final i =
           int.tryParse(
@@ -209,8 +217,7 @@ class _HomePageState extends State<HomePage> {
     // connection performs acknowledged teardown before starting a replacement.
     Aether.killStale();
     _saveSettings(); // persist the one-time Auto-order migration and defaults
-    _checkUpdates(interactive: false);
-    _loadVersion();
+    _checkStartupUpdates(hadSettings);
     if (_autoConnect) {
       _log('Auto-connecting in ${startupDelayMs ~/ 1000}s...');
       Future.delayed(const Duration(milliseconds: startupDelayMs), () {
@@ -333,6 +340,7 @@ class _HomePageState extends State<HomePage> {
     'HttpPort=${Aether.httpPort}\nSocksPort=${Aether.socksPort}\n'
     'TestUrl=${Aether.testUrl}\n'
     'RealDelayTest=${_realDelayTest ? 1 : 0}\n'
+    'LastSeenAppVersion=${_lastSeenAppVersion ?? ''}\n'
     'ConnectMs=${Aether.formatConnectMs(_connectMs)}\n'
     'AutoOrder=${_order.join(',')}\n'
     'MenuOrder=${_menuOrder.join(',')}\n'
@@ -931,9 +939,51 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Future<void> _loadVersion() async {
-    final version = await Aether.appVersion();
-    if (mounted) setState(() => _appVersion = version);
+  Future<void> _checkStartupUpdates(bool hadSettings) async {
+    try {
+      final version = await Aether.appVersion();
+      if (!mounted) return;
+      setState(() => _appVersion = version);
+      final current = Aether.parseVersion(version);
+      if (current != null) {
+        final show = shouldShowReleaseNotes(
+          current,
+          _lastSeenAppVersion,
+          hadSettings,
+        );
+        if (show) {
+          final bundled = await rootBundle.loadString(
+            'assets/release_notes.txt',
+          );
+          if (!mounted) return;
+          final notes = notesForVersion(bundled, current);
+          if (notes.isNotEmpty) {
+            await showDialog<void>(
+              context: context,
+              builder: (context) => AlertDialog(
+                title: Text("What's new in Aether ${current.join('.')}"),
+                scrollable: true,
+                content: Text(notes),
+                actions: [
+                  FilledButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Done'),
+                  ),
+                ],
+              ),
+            );
+          }
+        }
+        if (!mounted) return;
+        if (_lastSeenAppVersion == null || show) {
+          _lastSeenAppVersion = current.join('.');
+          _saveSettings();
+        }
+      }
+    } catch (e) {
+      if (mounted) _log('Could not load local release information: $e');
+    }
+    if (mounted) await _checkUpdates(interactive: false);
   }
 
   int? _torProgress;
@@ -1149,6 +1199,26 @@ class _HomePageState extends State<HomePage> {
                             }
                             setState(() {});
                           },
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Tooltip(
+                          message:
+                              'Verify internet access and measure delay through the tunnel.',
+                          child: CheckboxListTile(
+                            key: const Key('realDelayTest'),
+                            contentPadding: EdgeInsets.zero,
+                            controlAffinity: ListTileControlAffinity.leading,
+                            title: const Text('Real delay test'),
+                            value: _realDelayTest,
+                            onChanged: busy
+                                ? null
+                                : (value) {
+                                    setState(() => _realDelayTest = value!);
+                                    _saveSettings();
+                                  },
+                          ),
                         ),
                       ),
                     ],
@@ -1874,31 +1944,15 @@ class _HomePageState extends State<HomePage> {
                   },
           ),
           const SizedBox(height: 16),
-          SwitchListTile(
-            secondary: const Icon(Icons.network_check_rounded),
-            title: const Text('Real delay test'),
-            subtitle: const Text(
-              'Verify internet access and measure delay. When off, only the local proxy is checked.',
-            ),
-            value: _realDelayTest,
-            onChanged: busy
-                ? null
-                : (v) {
-                    setState(() => _realDelayTest = v);
-                    _saveSettings();
-                  },
-          ),
           // Typed URLs are saved once valid; the menu offers well-known ones.
           TextField(
             controller: _testUrlText,
-            enabled: _realDelayTest,
+            enabled: !busy,
             keyboardType: TextInputType.url,
             decoration: InputDecoration(
               labelText: 'Delay test URL',
-              helperText: 'Any http(s) page; the ping is how long it takes',
-              errorText: _realDelayTest
-                  ? Aether.testUrlError(_testUrlText.text)
-                  : null,
+              helperText: 'Used when Real delay test is on',
+              errorText: Aether.testUrlError(_testUrlText.text),
               suffixIcon: PopupMenuButton<String>(
                 tooltip: 'Suggested URLs',
                 icon: const Icon(Icons.arrow_drop_down_rounded),
@@ -1906,6 +1960,7 @@ class _HomePageState extends State<HomePage> {
                   for (final u in Aether.testUrlSuggestions)
                     PopupMenuItem(value: u, child: Text(u)),
                 ],
+                enabled: !busy,
                 onSelected: (u) {
                   _testUrlText.text = Aether.testUrl = u;
                   _saveSettings();

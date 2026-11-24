@@ -8,6 +8,8 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\Aether.cs" Link="Aether.cs" />
+    <Compile Include="..\ReleaseNotes.cs" Link="ReleaseNotes.cs" />
+    <EmbeddedResource Include="../flutter/assets/release_notes.txt" LogicalName="release_notes.txt" />
     <Compile Include="..\CoreOptions.cs" Link="CoreOptions.cs" />
     <Compile Include="..\CoreSettingsForm.cs" Link="CoreSettingsForm.cs" />
     <Compile Include="..\Form1.cs" Link="Form1.cs" />

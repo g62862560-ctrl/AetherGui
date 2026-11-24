@@ -22,5 +22,6 @@
     <None Include="pt\**;LICENSES\**;tun2socks\**" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <EmbeddedResource Include="flutter/assets/psiphon.png" LogicalName="psiphon.png" />
     <EmbeddedResource Include="flags\*.png" />
+    <EmbeddedResource Include="flutter/assets/release_notes.txt" LogicalName="release_notes.txt" />
   </ItemGroup>
 </Project>

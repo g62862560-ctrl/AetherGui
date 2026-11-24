@@ -18,6 +18,7 @@ partial class Form1
     private Button btnConnect = null!;
     private Button btnNextProtocol = null!;
     private NumericUpDown numTrySeconds = null!;
+    private CheckBox chkRealDelayTest = null!;
     private ToolStripMenuItem btnInfo = null!;
     private ToolStripMenuItem btnCoreSettings = null!;
     private ToolStripMenuItem btnCoreInput = null!;
@@ -166,6 +167,12 @@ partial class Form1
         var tryRow = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = true, Margin = Padding.Empty };
         tryRow.Controls.Add(new Label { Text = "Auto try (seconds)", AutoSize = true, Margin = new Padding(0, 5, 4, 0) });
         tryRow.Controls.Add(numTrySeconds);
+        chkRealDelayTest = new CheckBox
+        {
+            Text = "Real delay test", AutoSize = true, Margin = new Padding(12, 3, 0, 6),
+            AccessibleDescription = "Verify internet access and measure delay through the tunnel. When off, only the local proxy is checked."
+        };
+        tryRow.Controls.Add(chkRealDelayTest);
 
         // The connected protocol's numbers as four small cards, like the Android app.
         statCards = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 4, RowCount = 1, Margin = new Padding(0, 0, 0, 6), Visible = false, AccessibleName = "Connected protocol stats" };

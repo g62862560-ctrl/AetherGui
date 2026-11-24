@@ -9,7 +9,6 @@ sealed class CoreSettingsForm : Form
     private readonly NumericUpDown _timeout = new() { Minimum = 30, Maximum = 3600, Width = 120 };
     private readonly NumericUpDown _port = new() { Minimum = 1024, Maximum = 65535, Width = 100, Value = Aether.ProxyPort, AccessibleName = "Proxy port (HTTP and SOCKS5)" };
     private readonly ComboBox _testUrl = new() { DropDownStyle = ComboBoxStyle.DropDown, Width = 420, Text = Aether.TestUrl, AccessibleName = "Delay test URL" };
-    private readonly CheckBox _realDelayTest = new() { Text = "Verify connection and measure delay with a real web request", AutoSize = true, Checked = Aether.RealDelayTest, AccessibleName = "Real delay test" };
     private readonly IReadOnlyDictionary<int, int> _connectMs;
     private readonly IReadOnlyDictionary<int, ProtocolStat> _stats;
     // Drawn by hand so each row can show how the protocol did next to its name.
@@ -126,9 +125,6 @@ sealed class CoreSettingsForm : Form
         var portRow = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
         portRow.Controls.AddRange([new Label { Text = "Proxy port (HTTP + SOCKS5)", AutoSize = true }, _port]);
         Add(portRow);
-        _realDelayTest.CheckedChanged += (_, _) => _testUrl.Enabled = _realDelayTest.Checked;
-        _testUrl.Enabled = _realDelayTest.Checked;
-        Add(_realDelayTest);
         _testUrl.Items.AddRange(Aether.TestUrlSuggestions); // editable: pick one or type your own
         var urlRow = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
         urlRow.Controls.AddRange([new Label { Text = "Delay test URL", AutoSize = true }, _testUrl]);
@@ -158,7 +154,7 @@ sealed class CoreSettingsForm : Form
         reset.Click += (_, _) =>
         {
             _psiphonRegion.SelectedIndex = 0; _arguments.Text = "[]"; _environment.Text = "{}"; _timeout.Value = 300;
-            _port.Value = Aether.DefaultProxyPort; _realDelayTest.Checked = Aether.DefaultRealDelayTest; _testUrl.Text = Aether.DefaultTestUrl; ResetOrder();
+            _port.Value = Aether.DefaultProxyPort; _testUrl.Text = Aether.DefaultTestUrl; ResetOrder();
         };
         buttons.Controls.AddRange([save, reset, cancel]);
         settings.Controls.Add(layout); tabs.TabPages.AddRange([settings, orderTab, helpTab, psiphonTab]); Controls.AddRange([tabs, buttons]);
@@ -324,7 +320,7 @@ sealed class CoreSettingsForm : Form
     {
         var port = (int)_port.Value;
         if (Aether.ValidPort(port) is string error) { MessageBox.Show(this, error, Text); return; }
-        if (_realDelayTest.Checked && Aether.ValidTestUrl(_testUrl.Text) is string urlError) { MessageBox.Show(this, urlError, Text); return; }
+        if (Aether.ValidTestUrl(_testUrl.Text) is string urlError) { MessageBox.Show(this, urlError, Text); return; }
         var order = _order.CheckedItems.Cast<Preset>().Select(p => Array.IndexOf(Aether.Presets, p)).ToArray();
         if (order.Length == 0) { MessageBox.Show(this, "Check at least one protocol for Auto.", Text); return; }
         MenuOrder = _order.Items.Cast<Preset>().Select(p => Array.IndexOf(Aether.Presets, p)).ToArray();
@@ -332,7 +328,7 @@ sealed class CoreSettingsForm : Form
         try
         {
             var options = CoreOptions.Parse(_arguments.Text, _environment.Text, (int)_timeout.Value, (_psiphonRegion.SelectedItem as Psiphon.Country)?.Code);
-            options.Save(); Aether.ProxyPort = port; Aether.RealDelayTest = _realDelayTest.Checked; Aether.TestUrl = _testUrl.Text.Trim(); Aether.SavedOrder = order; Options = options; DialogResult = DialogResult.OK; Close();
+            options.Save(); Aether.ProxyPort = port; Aether.TestUrl = _testUrl.Text.Trim(); Aether.SavedOrder = order; Options = options; DialogResult = DialogResult.OK; Close();
         }
         catch (Exception ex) when (ex is System.Text.Json.JsonException or FormatException)
         { MessageBox.Show(this, "Invalid JSON/settings. Use string arrays and string environment values; do not override managed protocols or ports.", Text); }
