@@ -10,7 +10,9 @@ release_cert_sha256=94a974070556d47e18dfcb8a465fd8442a3e6a1750258a38856d4b306114
 fail() { echo "error: $*" >&2; exit 1; }
 
 [[ $v =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "version must look like 1.0.1"
-grep -Fxq "## $v" flutter/assets/release_notes.txt || fail "add release notes for $v to flutter/assets/release_notes.txt"
+# Check the committed notes, independent of the checkout's line endings.
+notes=$(git show HEAD:flutter/assets/release_notes.txt)
+awk -v heading="## $v" '$0 == heading { found = 1 } END { exit !found }' <<< "$notes" || fail "add release notes for $v to flutter/assets/release_notes.txt"
 git diff --quiet HEAD -- && [ -z "$(git ls-files --others --exclude-standard -- . ':!graphify-out')" ] || fail "commit your changes first"
 git rev-parse -q --verify "refs/tags/v$v" >/dev/null && fail "tag v$v already exists"
 current=$(sed -n 's|.*<Version>\([0-9.]*\)</Version>.*|\1|p' AetherGui.csproj)
